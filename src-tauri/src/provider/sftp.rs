@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use russh::client;
 use russh::keys::agent::client::AgentClient;
 use russh::keys::load_secret_key;
-use russh::Disconnect;
+use russh::{ChannelMsg, Disconnect};
 use russh_sftp::client::SftpSession;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -11,7 +12,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::connection::config::{SftpAuthMethod, SftpConfig};
 use crate::error::AppError;
 
-use super::{FileEntry, FileInfo, ProgressCallback, StorageProvider};
+use super::{
+    FileEntry, FileInfo, FilePropertyUpdate, OwnershipOption, OwnershipOptions, ProgressCallback,
+    ProviderCapabilities, StorageProvider,
+};
 
 /// Minimal SSH client handler that accepts all host keys.
 struct SshHandler;
@@ -33,6 +37,50 @@ pub struct SftpProvider {
     sftp: SftpSession,
     #[allow(dead_code)]
     config: SftpConfig,
+}
+
+const OWNER_COMMANDS: [&str; 2] = [
+    "getent passwd | awk -F: '{print $1\":\"$3}'",
+    "cat /etc/passwd | awk -F: '{print $1\":\"$3}'",
+];
+
+const GROUP_COMMANDS: [&str; 2] = [
+    "getent group | awk -F: '{print $1\":\"$3}'",
+    "cat /etc/group | awk -F: '{print $1\":\"$3}'",
+];
+
+fn parse_name_id_lines(output: &str) -> Vec<OwnershipOption> {
+    let mut seen: HashSet<(u32, String)> = HashSet::new();
+    let mut entries = Vec::new();
+
+    for raw_line in output.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let mut parts = line.splitn(2, ':');
+        let name = parts.next().unwrap_or_default().trim();
+        let id_str = parts.next().unwrap_or_default().trim();
+        if name.is_empty() || id_str.is_empty() {
+            continue;
+        }
+
+        let Ok(id) = id_str.parse::<u32>() else {
+            continue;
+        };
+
+        let owned_name = name.to_string();
+        if seen.insert((id, owned_name.clone())) {
+            entries.push(OwnershipOption {
+                id,
+                name: owned_name,
+            });
+        }
+    }
+
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries
 }
 
 /// Try authenticating with keys from an SSH agent.
@@ -72,9 +120,7 @@ async fn try_agent_auth(
     username: &str,
 ) -> Result<bool, AppError> {
     // Try Windows OpenSSH agent (named pipe) first
-    if let Ok(mut agent) =
-        AgentClient::connect_named_pipe("\\\\.\\pipe\\openssh-ssh-agent").await
-    {
+    if let Ok(mut agent) = AgentClient::connect_named_pipe("\\\\.\\pipe\\openssh-ssh-agent").await {
         match try_agent_keys(session, username, &mut agent).await {
             Ok(true) => return Ok(true),
             _ => {} // Fall through to Pageant
@@ -128,9 +174,7 @@ impl SftpProvider {
                 SftpAuthMethod::Password => {
                     let pw = password_or_passphrase
                         .as_deref()
-                        .ok_or(AppError::AuthenticationFailed(
-                            "Password required".into(),
-                        ))?;
+                        .ok_or(AppError::AuthenticationFailed("Password required".into()))?;
                     authenticated = session
                         .authenticate_password(&config.username, pw)
                         .await
@@ -140,15 +184,10 @@ impl SftpProvider {
                     key_path,
                     passphrase_protected: _,
                 } => {
-                    let key =
-                        load_secret_key(key_path, password_or_passphrase.as_deref()).map_err(
-                            |e| {
-                                AppError::AuthenticationFailed(format!(
-                                    "Failed to load key: {}",
-                                    e
-                                ))
-                            },
-                        )?;
+                    let key = load_secret_key(key_path, password_or_passphrase.as_deref())
+                        .map_err(|e| {
+                            AppError::AuthenticationFailed(format!("Failed to load key: {}", e))
+                        })?;
                     authenticated = session
                         .authenticate_publickey(&config.username, Arc::new(key))
                         .await
@@ -157,10 +196,7 @@ impl SftpProvider {
                 SftpAuthMethod::KeyboardInteractive => {
                     let otp = password_or_passphrase.unwrap_or_default();
                     let response = session
-                        .authenticate_keyboard_interactive_start(
-                            &config.username,
-                            None::<String>,
-                        )
+                        .authenticate_keyboard_interactive_start(&config.username, None::<String>)
                         .await
                         .map_err(|e| AppError::AuthenticationFailed(e.to_string()))?;
 
@@ -194,17 +230,12 @@ impl SftpProvider {
             .channel_open_session()
             .await
             .map_err(|e| AppError::ConnectionFailed(format!("Channel open failed: {}", e)))?;
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(|e| {
-                AppError::ConnectionFailed(format!("SFTP subsystem request failed: {}", e))
-            })?;
+        channel.request_subsystem(true, "sftp").await.map_err(|e| {
+            AppError::ConnectionFailed(format!("SFTP subsystem request failed: {}", e))
+        })?;
         let sftp = SftpSession::new(channel.into_stream())
             .await
-            .map_err(|e| {
-                AppError::ConnectionFailed(format!("SFTP session init failed: {}", e))
-            })?;
+            .map_err(|e| AppError::ConnectionFailed(format!("SFTP session init failed: {}", e)))?;
 
         Ok(Self {
             session,
@@ -212,12 +243,99 @@ impl SftpProvider {
             config,
         })
     }
+
+    async fn exec_stdout(&self, command: &str) -> Result<String, AppError> {
+        let mut channel = self.session.channel_open_session().await.map_err(|e| {
+            AppError::FileOperationFailed(format!("Failed to open SSH channel: {}", e))
+        })?;
+
+        channel.exec(true, command).await.map_err(|e| {
+            AppError::FileOperationFailed(format!("Failed to execute remote command: {}", e))
+        })?;
+
+        let mut stdout: Vec<u8> = Vec::new();
+        let mut stderr: Vec<u8> = Vec::new();
+        let mut exit_status: Option<u32> = None;
+
+        while let Some(message) = channel.wait().await {
+            match message {
+                ChannelMsg::Data { data } => stdout.extend_from_slice(data.as_ref()),
+                ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(data.as_ref()),
+                ChannelMsg::ExitStatus {
+                    exit_status: status,
+                } => {
+                    exit_status = Some(status);
+                }
+                ChannelMsg::Failure => {
+                    let _ = channel.close().await;
+                    return Err(AppError::UnsupportedProvider(
+                        "Remote SSH exec requests are not supported by this server".into(),
+                    ));
+                }
+                ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+
+        let _ = channel.close().await;
+
+        if let Some(status) = exit_status {
+            if status != 0 {
+                let stderr_text = String::from_utf8_lossy(&stderr).trim().to_string();
+                return Err(AppError::FileOperationFailed(format!(
+                    "Remote command failed with exit code {}{}",
+                    status,
+                    if stderr_text.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {}", stderr_text)
+                    }
+                )));
+            }
+        }
+
+        Ok(String::from_utf8_lossy(&stdout).to_string())
+    }
+
+    async fn load_options_with_fallback(
+        &self,
+        commands: &[&str],
+    ) -> Result<Vec<OwnershipOption>, AppError> {
+        let mut last_error: Option<AppError> = None;
+
+        for command in commands {
+            match self.exec_stdout(command).await {
+                Ok(output) => {
+                    let parsed = parse_name_id_lines(&output);
+                    if !parsed.is_empty() {
+                        return Ok(parsed);
+                    }
+                }
+                Err(err) => {
+                    last_error = Some(err);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            AppError::FileOperationFailed("Could not retrieve ownership options".into())
+        }))
+    }
 }
 
 #[async_trait]
 impl StorageProvider for SftpProvider {
     fn provider_type(&self) -> &'static str {
         "SFTP"
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            file_properties: true,
+            set_permissions: true,
+            set_owner_group: true,
+            list_ownership_options: true,
+        }
     }
 
     async fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>, AppError> {
@@ -281,8 +399,8 @@ impl StorageProvider for SftpProvider {
             modified: meta.mtime.map(|t| t as i64),
             created: None,
             permissions: meta.permissions.map(|p| format!("{:o}", p)),
-            owner: meta.uid.map(|u| u.to_string()),
-            group: meta.gid.map(|g| g.to_string()),
+            owner: meta.user.or_else(|| meta.uid.map(|u| u.to_string())),
+            group: meta.group.or_else(|| meta.gid.map(|g| g.to_string())),
             mime_type: None,
         })
     }
@@ -419,6 +537,45 @@ impl StorageProvider for SftpProvider {
     async fn mkdir(&self, path: &str) -> Result<(), AppError> {
         self.sftp
             .create_dir(path)
+            .await
+            .map_err(|e| AppError::FileOperationFailed(e.to_string()))
+    }
+
+    async fn list_ownership_options(&self) -> Result<OwnershipOptions, AppError> {
+        let owners = self.load_options_with_fallback(&OWNER_COMMANDS).await?;
+        let groups = self.load_options_with_fallback(&GROUP_COMMANDS).await?;
+        Ok(OwnershipOptions { owners, groups })
+    }
+
+    async fn set_file_properties(
+        &self,
+        path: &str,
+        update: FilePropertyUpdate,
+    ) -> Result<(), AppError> {
+        if update.permissions.is_none() && update.owner_id.is_none() && update.group_id.is_none() {
+            return Ok(());
+        }
+
+        let mut metadata = self
+            .sftp
+            .metadata(path)
+            .await
+            .map_err(|e| AppError::FileOperationFailed(e.to_string()))?;
+
+        if let Some(permissions) = update.permissions {
+            let sanitized = permissions & 0o7777;
+            let current_mode = metadata.permissions.unwrap_or(0);
+            metadata.permissions = Some((current_mode & !0o7777) | sanitized);
+        }
+        if let Some(owner_id) = update.owner_id {
+            metadata.uid = Some(owner_id);
+        }
+        if let Some(group_id) = update.group_id {
+            metadata.gid = Some(group_id);
+        }
+
+        self.sftp
+            .set_metadata(path, metadata)
             .await
             .map_err(|e| AppError::FileOperationFailed(e.to_string()))
     }

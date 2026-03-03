@@ -1,0 +1,24 @@
+{
+  "specVersion": "1.1",
+  "threadId": "41b3a5fd-155f-43bd-886b-7f79d0e24859",
+  "title": "Cross-location copy paste support",
+  "createdAt": "2026-03-03T19:48:14.180Z",
+  "updatedAt": "2026-03-03T19:49:20.200Z",
+  "agent": {
+    "id": "codex-acp",
+    "name": "codex-acp",
+    "protocol": "acp"
+  },
+  "context": {
+    "workingDir": "D:\\Projects\\EverythingBrowser"
+  },
+  "stats": {
+    "messageCount": 2,
+    "userMessageCount": 1,
+    "agentMessageCount": 1,
+    "toolCallCount": 4
+  },
+  "metadata": {
+    "interactionMode": "full-access"
+  }
+}

@@ -1,0 +1,79 @@
+services:
+  # 1. Password authentication
+  ssh-password:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: ssh-password
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Amsterdam
+      - USER_NAME=testuser
+      - USER_PASSWORD=testpass123
+      - PASSWORD_ACCESS=true
+      - SUDO_ACCESS=false
+    ports:
+      - "2221:2222"
+    volumes:
+      - ssh-password-data:/data
+    restart: unless-stopped
+
+  # 2. Public key authentication (ed25519)
+  ssh-pubkey:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: ssh-pubkey
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Amsterdam
+      - USER_NAME=testuser
+      - PUBLIC_KEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICqQkOB/2GefIHVgvqGcSIRuGz5cZz03iECD2W4NUy2D
+      - PASSWORD_ACCESS=false
+      - SUDO_ACCESS=false
+    ports:
+      - "2222:2222"
+    volumes:
+      - ssh-pubkey-data:/data
+    restart: unless-stopped
+
+  # 3. Password + public key (both enabled)
+  ssh-both:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: ssh-both
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Amsterdam
+      - USER_NAME=testuser
+      - USER_PASSWORD=testpass123
+      - PUBLIC_KEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICqQkOB/2GefIHVgvqGcSIRuGz5cZz03iECD2W4NUy2D
+      - PASSWORD_ACCESS=true
+      - SUDO_ACCESS=false
+    ports:
+      - "2223:2222"
+    volumes:
+      - ssh-both-data:/data
+    restart: unless-stopped
+
+  # 4. Different user with password (for multi-user testing)
+  ssh-altuser:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: ssh-altuser
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Amsterdam
+      - USER_NAME=admin
+      - USER_PASSWORD=admin456
+      - PASSWORD_ACCESS=true
+      - SUDO_ACCESS=true
+    ports:
+      - "2224:2222"
+    volumes:
+      - ssh-altuser-data:/data
+    restart: unless-stopped
+
+volumes:
+  ssh-password-data:
+  ssh-pubkey-data:
+  ssh-both-data:
+  ssh-altuser-data:

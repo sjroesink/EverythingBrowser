@@ -13,6 +13,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_drag::init())
         .manage(ConnectionManager::new())
         .invoke_handler(tauri::generate_handler![
             commands::connection_commands::connect,
@@ -21,12 +22,17 @@ pub fn run() {
             commands::connection_commands::is_connected,
             commands::file_commands::list_dir,
             commands::file_commands::get_file_info,
+            commands::file_commands::get_provider_capabilities,
+            commands::file_commands::list_ownership_options,
+            commands::file_commands::set_file_properties,
             commands::file_commands::download_file,
             commands::file_commands::upload_file,
             commands::file_commands::delete_file,
             commands::file_commands::delete_dir,
             commands::file_commands::rename_item,
             commands::file_commands::create_dir,
+            commands::file_commands::download_to_temp,
+            commands::file_commands::ensure_drag_icon,
             commands::credential_commands::save_credential,
             commands::credential_commands::delete_credential,
             importer::detect_import_sources,

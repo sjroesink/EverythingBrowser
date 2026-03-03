@@ -49,9 +49,9 @@ impl ConnectionManager {
         path: &str,
     ) -> Result<Vec<crate::provider::FileEntry>, AppError> {
         let active = self.active.read().await;
-        let provider = active
-            .get(connection_id)
-            .ok_or_else(|| AppError::NotFound(format!("No active connection: {}", connection_id)))?;
+        let provider = active.get(connection_id).ok_or_else(|| {
+            AppError::NotFound(format!("No active connection: {}", connection_id))
+        })?;
         provider.list_dir(path).await
     }
 
@@ -62,9 +62,9 @@ impl ConnectionManager {
         path: &str,
     ) -> Result<crate::provider::FileInfo, AppError> {
         let active = self.active.read().await;
-        let provider = active
-            .get(connection_id)
-            .ok_or_else(|| AppError::NotFound(format!("No active connection: {}", connection_id)))?;
+        let provider = active.get(connection_id).ok_or_else(|| {
+            AppError::NotFound(format!("No active connection: {}", connection_id))
+        })?;
         provider.get_info(path).await
     }
 
@@ -77,10 +77,12 @@ impl ConnectionManager {
         on_progress: Option<crate::provider::ProgressCallback>,
     ) -> Result<(), AppError> {
         let active = self.active.read().await;
-        let provider = active
-            .get(connection_id)
-            .ok_or_else(|| AppError::NotFound(format!("No active connection: {}", connection_id)))?;
-        provider.download(remote_path, local_path, on_progress).await
+        let provider = active.get(connection_id).ok_or_else(|| {
+            AppError::NotFound(format!("No active connection: {}", connection_id))
+        })?;
+        provider
+            .download(remote_path, local_path, on_progress)
+            .await
     }
 
     /// Upload a file via an active connection.
@@ -92,22 +94,18 @@ impl ConnectionManager {
         on_progress: Option<crate::provider::ProgressCallback>,
     ) -> Result<(), AppError> {
         let active = self.active.read().await;
-        let provider = active
-            .get(connection_id)
-            .ok_or_else(|| AppError::NotFound(format!("No active connection: {}", connection_id)))?;
+        let provider = active.get(connection_id).ok_or_else(|| {
+            AppError::NotFound(format!("No active connection: {}", connection_id))
+        })?;
         provider.upload(local_path, remote_path, on_progress).await
     }
 
     /// Delete a file via an active connection.
-    pub async fn delete_file(
-        &self,
-        connection_id: &str,
-        path: &str,
-    ) -> Result<(), AppError> {
+    pub async fn delete_file(&self, connection_id: &str, path: &str) -> Result<(), AppError> {
         let active = self.active.read().await;
-        let provider = active
-            .get(connection_id)
-            .ok_or_else(|| AppError::NotFound(format!("No active connection: {}", connection_id)))?;
+        let provider = active.get(connection_id).ok_or_else(|| {
+            AppError::NotFound(format!("No active connection: {}", connection_id))
+        })?;
         provider.delete_file(path).await
     }
 
@@ -119,37 +117,66 @@ impl ConnectionManager {
         recursive: bool,
     ) -> Result<(), AppError> {
         let active = self.active.read().await;
-        let provider = active
-            .get(connection_id)
-            .ok_or_else(|| AppError::NotFound(format!("No active connection: {}", connection_id)))?;
+        let provider = active.get(connection_id).ok_or_else(|| {
+            AppError::NotFound(format!("No active connection: {}", connection_id))
+        })?;
         provider.delete_dir(path, recursive).await
     }
 
     /// Rename a file/directory via an active connection.
-    pub async fn rename(
-        &self,
-        connection_id: &str,
-        from: &str,
-        to: &str,
-    ) -> Result<(), AppError> {
+    pub async fn rename(&self, connection_id: &str, from: &str, to: &str) -> Result<(), AppError> {
         let active = self.active.read().await;
-        let provider = active
-            .get(connection_id)
-            .ok_or_else(|| AppError::NotFound(format!("No active connection: {}", connection_id)))?;
+        let provider = active.get(connection_id).ok_or_else(|| {
+            AppError::NotFound(format!("No active connection: {}", connection_id))
+        })?;
         provider.rename(from, to).await
     }
 
     /// Create a directory via an active connection.
-    pub async fn mkdir(
+    pub async fn mkdir(&self, connection_id: &str, path: &str) -> Result<(), AppError> {
+        let active = self.active.read().await;
+        let provider = active.get(connection_id).ok_or_else(|| {
+            AppError::NotFound(format!("No active connection: {}", connection_id))
+        })?;
+        provider.mkdir(path).await
+    }
+
+    /// Get provider capabilities for an active connection.
+    pub async fn capabilities(
+        &self,
+        connection_id: &str,
+    ) -> Result<crate::provider::ProviderCapabilities, AppError> {
+        let active = self.active.read().await;
+        let provider = active.get(connection_id).ok_or_else(|| {
+            AppError::NotFound(format!("No active connection: {}", connection_id))
+        })?;
+        Ok(provider.capabilities())
+    }
+
+    /// List available owners/groups for an active connection.
+    pub async fn list_ownership_options(
+        &self,
+        connection_id: &str,
+    ) -> Result<crate::provider::OwnershipOptions, AppError> {
+        let active = self.active.read().await;
+        let provider = active.get(connection_id).ok_or_else(|| {
+            AppError::NotFound(format!("No active connection: {}", connection_id))
+        })?;
+        provider.list_ownership_options().await
+    }
+
+    /// Update file/folder properties for an active connection.
+    pub async fn set_file_properties(
         &self,
         connection_id: &str,
         path: &str,
+        update: crate::provider::FilePropertyUpdate,
     ) -> Result<(), AppError> {
         let active = self.active.read().await;
-        let provider = active
-            .get(connection_id)
-            .ok_or_else(|| AppError::NotFound(format!("No active connection: {}", connection_id)))?;
-        provider.mkdir(path).await
+        let provider = active.get(connection_id).ok_or_else(|| {
+            AppError::NotFound(format!("No active connection: {}", connection_id))
+        })?;
+        provider.set_file_properties(path, update).await
     }
 
     /// Disconnect and remove an active connection.

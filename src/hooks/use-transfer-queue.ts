@@ -81,7 +81,8 @@ export function useTransferQueue() {
       connectionId: string,
       localPath: string,
       remotePath: string,
-      fileName: string
+      fileName: string,
+      onCompleted?: () => void
     ) => {
       const id = crypto.randomUUID();
       const job: TransferJob = {
@@ -117,6 +118,7 @@ export function useTransferQueue() {
             break;
           case "completed":
             updateTransfer(id, { status: "completed" });
+            onCompleted?.();
             break;
           case "failed":
             updateTransfer(id, {

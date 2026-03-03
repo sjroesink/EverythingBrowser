@@ -49,3 +49,11 @@ export interface SavedConnection {
   color?: string;
   sortOrder: number;
 }
+
+export interface Tab {
+  id: string;
+  connectionId: string;
+  config: ConnectionConfig;
+  currentPath: string;
+}
+

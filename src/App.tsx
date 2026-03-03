@@ -1,16 +1,17 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Titlebar } from "@/components/layout/titlebar";
 import { Sidebar } from "@/components/layout/sidebar";
 import { StatusBar } from "@/components/layout/status-bar";
-import { FileBrowser } from "@/components/browser/file-browser";
+import { TabBar } from "@/components/browser/tab-bar";
+import { FileBrowserTab } from "@/components/browser/file-browser-tab";
 import { ConnectionDialog } from "@/components/connections/connection-dialog";
 import { TransferPanel } from "@/components/transfers/transfer-panel";
 import { ImportDialog } from "@/components/onboarding/import-dialog";
 import { useTheme } from "@/hooks/use-theme";
 import { useConnections } from "@/hooks/use-connections";
-import { useFileBrowser } from "@/hooks/use-file-browser";
 import { useTransferQueue } from "@/hooks/use-transfer-queue";
+import { useTabsStore } from "@/stores/use-tabs-store";
 import type { ConnectionConfig } from "@/types/connection";
 import type { FileEntry } from "@/types/filesystem";
 import { FolderOpen } from "lucide-react";
@@ -19,9 +20,9 @@ export default function App() {
   const { theme, setTheme } = useTheme();
   const {
     savedConnections,
-    activeConnectionId,
-    activeConfig,
+    activeConnectionIds,
     isConnecting,
+    isLoaded: connectionsLoaded,
     error: connectionError,
     addConnection,
     addConnections,
@@ -31,8 +32,28 @@ export default function App() {
     disconnect,
   } = useConnections();
 
-  const browser = useFileBrowser(activeConnectionId);
   const transfers = useTransferQueue();
+
+  const tabs = useTabsStore((state) => state.tabs);
+  const activeTabId = useTabsStore((state) => state.activeTabId);
+  const openTabInStore = useTabsStore((state) => state.openTab);
+  const closeTabInStore = useTabsStore((state) => state.closeTab);
+  const setActiveTab = useTabsStore((state) => state.setActiveTab);
+  const setTabPath = useTabsStore((state) => state.setTabPath);
+
+  const [tabsHydrated, setTabsHydrated] = useState(() =>
+    useTabsStore.persist.hasHydrated()
+  );
+  const restoredTabsRef = useRef(false);
+
+  const resolvedTabs = tabs.map((tab) => {
+    const savedConnection = savedConnections.find(
+      (conn) => conn.config.id === tab.connectionId
+    );
+    return savedConnection ? { ...tab, config: savedConnection.config } : tab;
+  });
+
+  const activeTab = resolvedTabs.find((t) => t.id === activeTabId) ?? null;
 
   const [showConnectionDialog, setShowConnectionDialog] = useState(false);
   const [editingConfig, setEditingConfig] = useState<ConnectionConfig | null>(
@@ -43,10 +64,36 @@ export default function App() {
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
 
+  useEffect(() => {
+    const unsubscribe = useTabsStore.persist.onFinishHydration(() => {
+      setTabsHydrated(true);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!tabsHydrated || !connectionsLoaded || restoredTabsRef.current) return;
+
+    restoredTabsRef.current = true;
+
+    for (const tab of tabs) {
+      const savedConnection = savedConnections.find(
+        (conn) => conn.config.id === tab.connectionId
+      );
+      const config = savedConnection?.config ?? tab.config;
+
+      void connect(config).catch(() => {
+        // Error state is handled in useConnections
+      });
+    }
+  }, [tabsHydrated, connectionsLoaded, tabs, savedConnections, connect]);
+
   // Show onboarding when no saved connections on first load
   useEffect(() => {
+    if (!connectionsLoaded) return;
+
     if (!onboardingChecked && savedConnections.length === 0) {
-      // Small delay to let the store finish loading
       const timer = setTimeout(() => {
         if (savedConnections.length === 0) {
           setShowOnboarding(true);
@@ -58,7 +105,7 @@ export default function App() {
     if (savedConnections.length > 0) {
       setOnboardingChecked(true);
     }
-  }, [savedConnections, onboardingChecked]);
+  }, [connectionsLoaded, savedConnections, onboardingChecked]);
 
   const handleImportComplete = useCallback(
     async (configs: ConnectionConfig[]) => {
@@ -67,29 +114,54 @@ export default function App() {
     [addConnections]
   );
 
-  // Navigate to default path when connecting
-  useEffect(() => {
-    if (activeConnectionId && activeConfig) {
-      let defaultPath = "/";
-      if (activeConfig.type === "Sftp" && activeConfig.defaultPath) {
-        defaultPath = activeConfig.defaultPath;
+  const openTab = useCallback(
+    (config: ConnectionConfig, connectionId: string) => {
+      openTabInStore(config, connectionId);
+    },
+    [openTabInStore]
+  );
+
+  const closeTab = useCallback(
+    (tabId: string) => {
+      const tab = tabs.find((t) => t.id === tabId);
+      closeTabInStore(tabId);
+      if (tab) {
+        void disconnect(tab.connectionId);
       }
-      browser.navigateTo(defaultPath);
-    } else {
-      browser.reset();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeConnectionId]);
+    },
+    [tabs, closeTabInStore, disconnect]
+  );
 
   const handleConnect = useCallback(
     async (config: ConnectionConfig, secret?: string) => {
       try {
-        await connect(config, secret);
+        const connectionId = await connect(config, secret);
+        openTab(config, connectionId);
       } catch {
         // Error is handled in the hook
       }
     },
-    [connect]
+    [connect, openTab]
+  );
+
+  const handleDisconnect = useCallback(
+    (connectionId: string) => {
+      const tab = tabs.find((t) => t.connectionId === connectionId);
+      if (tab) {
+        closeTab(tab.id);
+      }
+    },
+    [tabs, closeTab]
+  );
+
+  const handleFocusConnection = useCallback(
+    (connectionId: string) => {
+      const tab = tabs.find((t) => t.connectionId === connectionId);
+      if (tab) {
+        setActiveTab(tab.id);
+      }
+    },
+    [tabs, setActiveTab]
   );
 
   const handleSaveConnection = useCallback(
@@ -106,15 +178,14 @@ export default function App() {
   );
 
   const handleDownload = useCallback(
-    async (entry: FileEntry) => {
-      if (!activeConnectionId) return;
+    async (connectionId: string, entry: FileEntry) => {
       const localPath = await openDialog({
         defaultPath: entry.name,
         directory: false,
       });
       if (localPath) {
         transfers.enqueueDownload(
-          activeConnectionId,
+          connectionId,
           entry.path,
           localPath as string,
           entry.name
@@ -122,30 +193,61 @@ export default function App() {
         setShowTransfers(true);
       }
     },
-    [activeConnectionId, transfers]
+    [transfers]
   );
 
-  const handleUpload = useCallback(async () => {
-    if (!activeConnectionId) return;
-    const localPath = await openDialog({
-      multiple: false,
-      directory: false,
-    });
-    if (localPath) {
-      const fileName = (localPath as string).split(/[\\/]/).pop() || "file";
-      const remotePath =
-        browser.currentPath === "/"
-          ? `/${fileName}`
-          : `${browser.currentPath}/${fileName}`;
-      transfers.enqueueUpload(
-        activeConnectionId,
-        localPath as string,
-        remotePath,
-        fileName
-      );
-      setShowTransfers(true);
-    }
-  }, [activeConnectionId, browser.currentPath, transfers]);
+  const handleUpload = useCallback(
+    async (
+      connectionId: string,
+      currentPath: string,
+      onUploaded?: () => void
+    ) => {
+      const localPath = await openDialog({
+        multiple: false,
+        directory: false,
+      });
+      if (localPath) {
+        const fileName = (localPath as string).split(/[\\/]/).pop() || "file";
+        const remotePath =
+          currentPath === "/" ? `/${fileName}` : `${currentPath}/${fileName}`;
+        transfers.enqueueUpload(
+          connectionId,
+          localPath as string,
+          remotePath,
+          fileName,
+          onUploaded
+        );
+        setShowTransfers(true);
+      }
+    },
+    [transfers]
+  );
+
+  const handleDropUpload = useCallback(
+    (
+      connectionId: string,
+      currentPath: string,
+      localPaths: string[],
+      onUploaded?: () => void
+    ) => {
+      for (const localPath of localPaths) {
+        const fileName = localPath.split(/[\\/]/).pop() || "file";
+        const remotePath =
+          currentPath === "/" ? `/${fileName}` : `${currentPath}/${fileName}`;
+        transfers.enqueueUpload(
+          connectionId,
+          localPath,
+          remotePath,
+          fileName,
+          onUploaded
+        );
+      }
+      if (localPaths.length > 0) {
+        setShowTransfers(true);
+      }
+    },
+    [transfers]
+  );
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -154,12 +256,13 @@ export default function App() {
       <div className="flex flex-1 min-h-0">
         <Sidebar
           savedConnections={savedConnections}
-          activeConnectionId={activeConnectionId}
+          activeConnectionIds={activeConnectionIds}
           isConnecting={isConnecting}
           theme={theme}
           onSetTheme={setTheme}
           onConnect={handleConnect}
-          onDisconnect={disconnect}
+          onDisconnect={handleDisconnect}
+          onFocusConnection={handleFocusConnection}
           onAddConnection={() => {
             setEditingConfig(null);
             setShowConnectionDialog(true);
@@ -173,27 +276,31 @@ export default function App() {
         />
 
         <div className="flex-1 flex flex-col min-w-0">
-          {activeConnectionId ? (
-            <FileBrowser
-              connectionId={activeConnectionId}
-              currentPath={browser.currentPath}
-              entries={browser.entries}
-              isLoading={browser.isLoading}
-              error={browser.error}
-              viewMode={browser.viewMode}
-              selectedPaths={browser.selectedPaths}
-              canGoBack={browser.canGoBack}
-              canGoForward={browser.canGoForward}
-              onNavigateTo={browser.navigateTo}
-              onRefresh={browser.refresh}
-              onGoUp={browser.goUp}
-              onGoBack={browser.goBack}
-              onGoForward={browser.goForward}
-              onSetViewMode={browser.setViewMode}
-              onSelect={browser.toggleSelection}
-              onDownload={handleDownload}
-              onUpload={handleUpload}
-            />
+          <TabBar
+            tabs={resolvedTabs}
+            activeTabId={activeTabId}
+            onSelectTab={setActiveTab}
+            onCloseTab={closeTab}
+          />
+
+          {resolvedTabs.length > 0 ? (
+            <div className="flex-1 relative min-h-0">
+              {resolvedTabs.map((tab) => (
+                <FileBrowserTab
+                  key={tab.id}
+                  tabId={tab.id}
+                  connectionId={tab.connectionId}
+                  config={tab.config}
+                  isVisible={tab.id === activeTabId}
+                  isConnected={activeConnectionIds.has(tab.connectionId)}
+                  initialPath={tab.currentPath}
+                  onPathChange={setTabPath}
+                  onDownload={handleDownload}
+                  onUpload={handleUpload}
+                  onDropUpload={handleDropUpload}
+                />
+              ))}
+            </div>
           ) : (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
@@ -223,7 +330,7 @@ export default function App() {
       </div>
 
       <StatusBar
-        activeConfig={activeConfig}
+        activeConfig={activeTab?.config ?? null}
         transferCount={transfers.activeCount}
         onToggleTransfers={() => setShowTransfers(!showTransfers)}
       />

@@ -14,9 +14,10 @@ import type { FileEntry } from "@/types/filesystem";
 interface FileGridProps {
   entries: FileEntry[];
   selectedPaths: Set<string>;
-  onSelect: (path: string, multi: boolean) => void;
-  onOpen: (entry: FileEntry) => void;
+  draggedEntry: FileEntry | null;
+  dropTargetPath: string | null;
   onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void;
+  onMouseDownEntry: (entry: FileEntry, e: React.MouseEvent) => void;
 }
 
 function getFileIconLarge(entry: FileEntry) {
@@ -43,24 +44,35 @@ function getFileIconLarge(entry: FileEntry) {
 export function FileGrid({
   entries,
   selectedPaths,
-  onSelect,
-  onOpen,
+  draggedEntry,
+  dropTargetPath,
   onContextMenu,
+  onMouseDownEntry,
 }: FileGridProps) {
   return (
     <div className="flex-1 overflow-auto p-3">
       <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-2">
         {entries.map((entry) => {
           const isSelected = selectedPaths.has(entry.path);
+          const isDragged = draggedEntry?.path === entry.path;
+          const isDropTarget = dropTargetPath === entry.path && entry.isDir;
           return (
             <div
               key={entry.path}
-              onClick={(e) => onSelect(entry.path, e.ctrlKey || e.metaKey)}
-              onDoubleClick={() => onOpen(entry)}
+              data-entry-path={entry.path}
+              data-is-dir={entry.isDir ? "true" : "false"}
               onContextMenu={(e) => onContextMenu(e, entry)}
-              className={`flex flex-col items-center gap-1 p-3 rounded-lg cursor-pointer transition-colors ${
-                isSelected ? "bg-primary/10" : "hover:bg-accent/50"
-              }`}
+              onMouseDown={(e) => {
+                if (e.button === 0) onMouseDownEntry(entry, e);
+              }}
+              onDragStart={(e) => e.preventDefault()}
+              className={`flex flex-col items-center gap-1 p-3 rounded-lg cursor-pointer transition-colors select-none ${
+                isDropTarget
+                  ? "bg-primary/20 ring-1 ring-primary/40"
+                  : isSelected
+                    ? "bg-primary/10"
+                    : "hover:bg-accent/50"
+              } ${isDragged ? "opacity-40" : ""}`}
             >
               {getFileIconLarge(entry)}
               <span className="text-xs text-center truncate w-full mt-1">

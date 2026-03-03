@@ -1,0 +1,56 @@
+import { Server, Cloud, X } from "lucide-react";
+import type { Tab } from "@/types/connection";
+
+interface TabBarProps {
+  tabs: Tab[];
+  activeTabId: string | null;
+  onSelectTab: (tabId: string) => void;
+  onCloseTab: (tabId: string) => void;
+}
+
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: TabBarProps) {
+  if (tabs.length === 0) return null;
+
+  return (
+    <div className="flex bg-sidebar border-b border-border overflow-x-auto shrink-0">
+      {tabs.map((tab) => {
+        const isActive = tab.id === activeTabId;
+        return (
+          <div
+            key={tab.id}
+            onClick={() => onSelectTab(tab.id)}
+            onMouseDown={(e) => {
+              if (e.button === 1) {
+                e.preventDefault();
+                onCloseTab(tab.id);
+              }
+            }}
+            className={`group flex items-center gap-1.5 px-3 h-9 text-sm cursor-pointer border-r border-border select-none shrink-0 ${
+              isActive
+                ? "bg-background text-foreground"
+                : "text-muted-foreground hover:text-foreground hover:bg-foreground/5"
+            }`}
+          >
+            {tab.config.type === "Sftp" ? (
+              <Server className="w-3.5 h-3.5 shrink-0" />
+            ) : (
+              <Cloud className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span className="truncate max-w-[140px]">{tab.config.name}</span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onCloseTab(tab.id);
+              }}
+              className={`shrink-0 w-4 h-4 rounded-sm inline-flex items-center justify-center hover:bg-foreground/10 transition-opacity ${
+                isActive ? "opacity-60 hover:opacity-100" : "opacity-0 group-hover:opacity-60 hover:!opacity-100"
+              }`}
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}

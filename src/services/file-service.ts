@@ -1,5 +1,11 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
-import type { FileEntry, FileInfo } from "@/types/filesystem";
+import type {
+  FileEntry,
+  FileInfo,
+  FilePropertyUpdate,
+  OwnershipOptions,
+  ProviderCapabilities,
+} from "@/types/filesystem";
 import type { TransferEvent } from "@/types/transfer";
 
 export async function listDir(
@@ -14,6 +20,28 @@ export async function getFileInfo(
   path: string
 ): Promise<FileInfo> {
   return invoke<FileInfo>("get_file_info", { connectionId, path });
+}
+
+export async function getProviderCapabilities(
+  connectionId: string
+): Promise<ProviderCapabilities> {
+  return invoke<ProviderCapabilities>("get_provider_capabilities", {
+    connectionId,
+  });
+}
+
+export async function listOwnershipOptions(
+  connectionId: string
+): Promise<OwnershipOptions> {
+  return invoke<OwnershipOptions>("list_ownership_options", { connectionId });
+}
+
+export async function setFileProperties(
+  connectionId: string,
+  path: string,
+  update: FilePropertyUpdate
+): Promise<void> {
+  return invoke("set_file_properties", { connectionId, path, update });
 }
 
 export async function downloadFile(
@@ -76,4 +104,15 @@ export async function createDir(
   path: string
 ): Promise<void> {
   return invoke("create_dir", { connectionId, path });
+}
+
+export async function downloadToTemp(
+  connectionId: string,
+  remotePath: string
+): Promise<string> {
+  return invoke<string>("download_to_temp", { connectionId, remotePath });
+}
+
+export async function ensureDragIcon(): Promise<string> {
+  return invoke<string>("ensure_drag_icon");
 }

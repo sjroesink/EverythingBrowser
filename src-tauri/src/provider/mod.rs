@@ -34,12 +34,48 @@ pub struct FileInfo {
     pub mime_type: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCapabilities {
+    pub file_properties: bool,
+    pub set_permissions: bool,
+    pub set_owner_group: bool,
+    pub list_ownership_options: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnershipOption {
+    pub id: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnershipOptions {
+    pub owners: Vec<OwnershipOption>,
+    pub groups: Vec<OwnershipOption>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FilePropertyUpdate {
+    pub permissions: Option<u32>,
+    pub owner_id: Option<u32>,
+    pub group_id: Option<u32>,
+}
+
 pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send + Sync>;
 
 #[async_trait]
 pub trait StorageProvider: Send + Sync {
     /// Human-readable name for this provider type.
     fn provider_type(&self) -> &'static str;
+
+    /// Feature flags for this provider.
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::default()
+    }
 
     /// List contents of a directory (or bucket prefix). "/" for root.
     async fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>, AppError>;
@@ -74,6 +110,26 @@ pub trait StorageProvider: Send + Sync {
 
     /// Create a new directory.
     async fn mkdir(&self, path: &str) -> Result<(), AppError>;
+
+    /// List available ownership principals (users/groups).
+    async fn list_ownership_options(&self) -> Result<OwnershipOptions, AppError> {
+        Err(AppError::UnsupportedProvider(format!(
+            "{} does not support ownership options",
+            self.provider_type()
+        )))
+    }
+
+    /// Update file/folder properties (permissions/owner/group).
+    async fn set_file_properties(
+        &self,
+        _path: &str,
+        _update: FilePropertyUpdate,
+    ) -> Result<(), AppError> {
+        Err(AppError::UnsupportedProvider(format!(
+            "{} does not support updating file properties",
+            self.provider_type()
+        )))
+    }
 
     /// Check if the connection is still alive.
     async fn ping(&self) -> Result<bool, AppError>;

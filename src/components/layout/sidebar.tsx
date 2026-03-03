@@ -5,12 +5,13 @@ import type { Theme } from "@/hooks/use-theme";
 
 interface SidebarProps {
   savedConnections: SavedConnection[];
-  activeConnectionId: string | null;
+  activeConnectionIds: Set<string>;
   isConnecting: boolean;
   theme: Theme;
   onSetTheme: (theme: Theme) => void;
   onConnect: (config: ConnectionConfig, secret?: string) => void;
-  onDisconnect: () => void;
+  onDisconnect: (connectionId: string) => void;
+  onFocusConnection: (connectionId: string) => void;
   onAddConnection: () => void;
   onEditConnection: (config: ConnectionConfig) => void;
   onRemoveConnection: (id: string) => void;
@@ -19,12 +20,13 @@ interface SidebarProps {
 
 export function Sidebar({
   savedConnections,
-  activeConnectionId,
+  activeConnectionIds,
   isConnecting,
   theme,
   onSetTheme,
   onConnect,
   onDisconnect,
+  onFocusConnection,
   onAddConnection,
   onEditConnection,
   onRemoveConnection,
@@ -83,10 +85,11 @@ export function Sidebar({
       <div className="flex-1 overflow-y-auto py-1">
         <ConnectionList
           connections={savedConnections}
-          activeConnectionId={activeConnectionId}
+          activeConnectionIds={activeConnectionIds}
           isConnecting={isConnecting}
           onConnect={onConnect}
           onDisconnect={onDisconnect}
+          onFocusConnection={onFocusConnection}
           onEdit={onEditConnection}
           onRemove={onRemoveConnection}
         />

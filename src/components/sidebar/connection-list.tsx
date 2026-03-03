@@ -3,20 +3,22 @@ import type { ConnectionConfig, SavedConnection } from "@/types/connection";
 
 interface ConnectionListProps {
   connections: SavedConnection[];
-  activeConnectionId: string | null;
+  activeConnectionIds: Set<string>;
   isConnecting: boolean;
   onConnect: (config: ConnectionConfig, secret?: string) => void;
-  onDisconnect: () => void;
+  onDisconnect: (connectionId: string) => void;
+  onFocusConnection: (connectionId: string) => void;
   onEdit: (config: ConnectionConfig) => void;
   onRemove: (id: string) => void;
 }
 
 export function ConnectionList({
   connections,
-  activeConnectionId,
+  activeConnectionIds,
   isConnecting,
   onConnect,
   onDisconnect,
+  onFocusConnection,
   onEdit,
   onRemove,
 }: ConnectionListProps) {
@@ -37,10 +39,11 @@ export function ConnectionList({
         <ConnectionItem
           key={conn.config.id}
           connection={conn}
-          isActive={activeConnectionId === conn.config.id}
-          isConnecting={isConnecting && activeConnectionId === null}
+          isActive={activeConnectionIds.has(conn.config.id)}
+          isConnecting={isConnecting}
           onConnect={onConnect}
           onDisconnect={onDisconnect}
+          onFocusConnection={onFocusConnection}
           onEdit={onEdit}
           onRemove={onRemove}
         />

@@ -14,9 +14,10 @@ import type { FileEntry } from "@/types/filesystem";
 interface FileListProps {
   entries: FileEntry[];
   selectedPaths: Set<string>;
-  onSelect: (path: string, multi: boolean) => void;
-  onOpen: (entry: FileEntry) => void;
+  draggedEntry: FileEntry | null;
+  dropTargetPath: string | null;
   onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void;
+  onMouseDownEntry: (entry: FileEntry, e: React.MouseEvent) => void;
 }
 
 function getFileIcon(entry: FileEntry) {
@@ -46,9 +47,10 @@ function getFileIcon(entry: FileEntry) {
 export function FileList({
   entries,
   selectedPaths,
-  onSelect,
-  onOpen,
+  draggedEntry,
+  dropTargetPath,
   onContextMenu,
+  onMouseDownEntry,
 }: FileListProps) {
   return (
     <div className="flex-1 overflow-auto">
@@ -64,17 +66,25 @@ export function FileList({
         <tbody>
           {entries.map((entry) => {
             const isSelected = selectedPaths.has(entry.path);
+            const isDragged = draggedEntry?.path === entry.path;
+            const isDropTarget = dropTargetPath === entry.path && entry.isDir;
             return (
               <tr
                 key={entry.path}
-                onClick={(e) => onSelect(entry.path, e.ctrlKey || e.metaKey)}
-                onDoubleClick={() => onOpen(entry)}
+                data-entry-path={entry.path}
+                data-is-dir={entry.isDir ? "true" : "false"}
                 onContextMenu={(e) => onContextMenu(e, entry)}
-                className={`cursor-pointer border-b border-border/50 transition-colors ${
-                  isSelected
-                    ? "bg-primary/10"
-                    : "hover:bg-accent/50"
-                }`}
+                onMouseDown={(e) => {
+                  if (e.button === 0) onMouseDownEntry(entry, e);
+                }}
+                onDragStart={(e) => e.preventDefault()}
+                className={`cursor-pointer border-b border-border/50 transition-colors select-none ${
+                  isDropTarget
+                    ? "bg-primary/20 ring-1 ring-primary/40"
+                    : isSelected
+                      ? "bg-primary/10"
+                      : "hover:bg-accent/50"
+                } ${isDragged ? "opacity-40" : ""}`}
               >
                 <td className="px-3 py-1.5">
                   <div className="flex items-center gap-2">

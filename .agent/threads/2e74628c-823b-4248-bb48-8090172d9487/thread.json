@@ -1,0 +1,24 @@
+{
+  "specVersion": "1.1",
+  "threadId": "2e74628c-823b-4248-bb48-8090172d9487",
+  "title": "Rename Sessions to Connections Throughout",
+  "createdAt": "2026-03-03T19:45:00.573Z",
+  "updatedAt": "2026-03-03T19:45:48.186Z",
+  "agent": {
+    "id": "codex-acp",
+    "name": "codex-acp",
+    "protocol": "acp"
+  },
+  "context": {
+    "workingDir": "D:\\Projects\\EverythingBrowser"
+  },
+  "stats": {
+    "messageCount": 2,
+    "userMessageCount": 1,
+    "agentMessageCount": 1,
+    "toolCallCount": 2
+  },
+  "metadata": {
+    "interactionMode": "full-access"
+  }
+}

@@ -1,4 +1,4 @@
-import { Download, Trash2, Pencil, FolderOpen, Copy } from "lucide-react";
+import { Download, Trash2, Pencil, FolderOpen, Copy, Settings2 } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { FileEntry } from "@/types/filesystem";
 
@@ -12,6 +12,8 @@ interface ContextMenuProps {
   onRename: (entry: FileEntry) => void;
   onOpen: (entry: FileEntry) => void;
   onCopyPath: (entry: FileEntry) => void;
+  onProperties: (entry: FileEntry) => void;
+  showProperties: boolean;
 }
 
 export function ContextMenu({
@@ -24,6 +26,8 @@ export function ContextMenu({
   onRename,
   onOpen,
   onCopyPath,
+  onProperties,
+  showProperties,
 }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -97,6 +101,18 @@ export function ContextMenu({
         <Copy className="w-3.5 h-3.5" />
         Copy Path
       </button>
+      {showProperties && (
+        <button
+          onClick={() => {
+            onProperties(entry);
+            onClose();
+          }}
+          className={itemClass}
+        >
+          <Settings2 className="w-3.5 h-3.5" />
+          Properties
+        </button>
+      )}
       <div className="my-1 border-t border-border" />
       <button
         onClick={() => {

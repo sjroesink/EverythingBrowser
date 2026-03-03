@@ -1,0 +1,24 @@
+{
+  "specVersion": "1.1",
+  "threadId": "8d5d2583-eb06-456d-a948-2ed968345034",
+  "title": "Properties dialog met conditionale weergave",
+  "createdAt": "2026-03-03T19:13:48.746Z",
+  "updatedAt": "2026-03-03T19:46:33.977Z",
+  "agent": {
+    "id": "codex-acp",
+    "name": "codex-acp",
+    "protocol": "acp"
+  },
+  "context": {
+    "workingDir": "D:\\Projects\\EverythingBrowser"
+  },
+  "stats": {
+    "messageCount": 5,
+    "userMessageCount": 4,
+    "agentMessageCount": 1,
+    "toolCallCount": 141
+  },
+  "metadata": {
+    "interactionMode": "full-access"
+  }
+}

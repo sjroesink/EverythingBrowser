@@ -7,7 +7,8 @@ interface ConnectionItemProps {
   isActive: boolean;
   isConnecting: boolean;
   onConnect: (config: ConnectionConfig, secret?: string) => void;
-  onDisconnect: () => void;
+  onDisconnect: (connectionId: string) => void;
+  onFocusConnection: (connectionId: string) => void;
   onEdit: (config: ConnectionConfig) => void;
   onRemove: (id: string) => void;
 }
@@ -18,6 +19,7 @@ export function ConnectionItem({
   isConnecting,
   onConnect,
   onDisconnect,
+  onFocusConnection,
   onEdit,
   onRemove,
 }: ConnectionItemProps) {
@@ -57,7 +59,8 @@ export function ConnectionItem({
 
   const handleDoubleClick = () => {
     if (isActive) {
-      onDisconnect();
+      // Tab already open, focus it
+      onFocusConnection(config.id);
     } else {
       onConnect(config);
     }
@@ -105,7 +108,7 @@ export function ConnectionItem({
           {isActive ? (
             <button
               onClick={() => {
-                onDisconnect();
+                onDisconnect(config.id);
                 setShowMenu(false);
               }}
               className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-left hover:bg-accent transition-colors"

@@ -19,3 +19,26 @@ export interface FileInfo {
   group?: string;
   mimeType?: string;
 }
+
+export interface ProviderCapabilities {
+  fileProperties: boolean;
+  setPermissions: boolean;
+  setOwnerGroup: boolean;
+  listOwnershipOptions: boolean;
+}
+
+export interface OwnershipOption {
+  id: number;
+  name: string;
+}
+
+export interface OwnershipOptions {
+  owners: OwnershipOption[];
+  groups: OwnershipOption[];
+}
+
+export interface FilePropertyUpdate {
+  permissions?: number;
+  ownerId?: number;
+  groupId?: number;
+}

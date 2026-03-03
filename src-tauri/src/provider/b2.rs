@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crate::connection::config::B2Config;
 use crate::error::AppError;
 
-use super::{FileEntry, FileInfo, ProgressCallback, StorageProvider};
+use super::{FileEntry, FileInfo, ProgressCallback, ProviderCapabilities, StorageProvider};
 
 pub struct BackblazeB2Provider {
     bucket: Box<Bucket>,
@@ -24,9 +24,10 @@ impl From<S3Error> for AppError {
 
 impl BackblazeB2Provider {
     pub async fn connect(config: B2Config, application_key: String) -> Result<Self, AppError> {
-        let endpoint = config.endpoint.clone().unwrap_or_else(|| {
-            format!("https://s3.{}.backblazeb2.com", config.region)
-        });
+        let endpoint = config
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| format!("https://s3.{}.backblazeb2.com", config.region));
 
         let region = Region::Custom {
             region: config.region.clone(),
@@ -57,6 +58,15 @@ impl BackblazeB2Provider {
 impl StorageProvider for BackblazeB2Provider {
     fn provider_type(&self) -> &'static str {
         "Backblaze B2"
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            file_properties: false,
+            set_permissions: false,
+            set_owner_group: false,
+            list_ownership_options: false,
+        }
     }
 
     async fn list_dir(&self, path: &str) -> Result<Vec<FileEntry>, AppError> {
@@ -102,12 +112,7 @@ impl StorageProvider for BackblazeB2Provider {
             }
             // Objects are "files"
             for obj in &result.contents {
-                let name = obj
-                    .key
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&obj.key)
-                    .to_string();
+                let name = obj.key.rsplit('/').next().unwrap_or(&obj.key).to_string();
                 if name.is_empty() {
                     continue;
                 }
@@ -248,7 +253,11 @@ impl StorageProvider for BackblazeB2Provider {
 
     async fn ping(&self) -> Result<bool, AppError> {
         // Try listing with a very small limit
-        match self.bucket.list("/".to_string(), Some("/".to_string())).await {
+        match self
+            .bucket
+            .list("/".to_string(), Some("/".to_string()))
+            .await
+        {
             Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }

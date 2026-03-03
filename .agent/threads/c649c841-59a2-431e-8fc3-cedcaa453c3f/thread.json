@@ -1,0 +1,24 @@
+{
+  "specVersion": "1.1",
+  "threadId": "c649c841-59a2-431e-8fc3-cedcaa453c3f",
+  "title": "Add persistent tab state with Zustand",
+  "createdAt": "2026-03-03T19:17:50.120Z",
+  "updatedAt": "2026-03-03T19:35:23.835Z",
+  "agent": {
+    "id": "codex-acp",
+    "name": "codex-acp",
+    "protocol": "acp"
+  },
+  "context": {
+    "workingDir": "D:\\Projects\\EverythingBrowser"
+  },
+  "stats": {
+    "messageCount": 4,
+    "userMessageCount": 3,
+    "agentMessageCount": 1,
+    "toolCallCount": 75
+  },
+  "metadata": {
+    "interactionMode": "full-access"
+  }
+}

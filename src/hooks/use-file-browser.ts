@@ -4,8 +4,8 @@ import { listDir } from "@/services/file-service";
 
 export type ViewMode = "list" | "grid";
 
-export function useFileBrowser(connectionId: string | null) {
-  const [currentPath, setCurrentPath] = useState("/");
+export function useFileBrowser(connectionId: string | null, initialPath = "/") {
+  const [currentPath, setCurrentPath] = useState(initialPath);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -122,13 +122,13 @@ export function useFileBrowser(connectionId: string | null) {
   }, []);
 
   const reset = useCallback(() => {
-    setCurrentPath("/");
+    setCurrentPath(initialPath);
     setEntries([]);
     setHistory([]);
     setHistoryIndex(-1);
     setSelectedPaths(new Set());
     setError(null);
-  }, []);
+  }, [initialPath]);
 
   return {
     currentPath,
