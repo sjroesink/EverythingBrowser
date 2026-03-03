@@ -1,0 +1,113 @@
+import { Download, Trash2, Pencil, FolderOpen, Copy } from "lucide-react";
+import { useEffect, useRef } from "react";
+import type { FileEntry } from "@/types/filesystem";
+
+interface ContextMenuProps {
+  x: number;
+  y: number;
+  entry: FileEntry;
+  onClose: () => void;
+  onDownload: (entry: FileEntry) => void;
+  onDelete: (entry: FileEntry) => void;
+  onRename: (entry: FileEntry) => void;
+  onOpen: (entry: FileEntry) => void;
+  onCopyPath: (entry: FileEntry) => void;
+}
+
+export function ContextMenu({
+  x,
+  y,
+  entry,
+  onClose,
+  onDownload,
+  onDelete,
+  onRename,
+  onOpen,
+  onCopyPath,
+}: ContextMenuProps) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [onClose]);
+
+  const itemClass =
+    "flex items-center gap-2 w-full px-3 py-1.5 text-sm text-left hover:bg-accent transition-colors";
+
+  return (
+    <div
+      ref={ref}
+      className="fixed z-50 w-48 bg-popover border border-border rounded-lg shadow-lg py-1"
+      style={{ left: x, top: y }}
+    >
+      {entry.isDir && (
+        <button
+          onClick={() => {
+            onOpen(entry);
+            onClose();
+          }}
+          className={itemClass}
+        >
+          <FolderOpen className="w-3.5 h-3.5" />
+          Open
+        </button>
+      )}
+      {!entry.isDir && (
+        <button
+          onClick={() => {
+            onDownload(entry);
+            onClose();
+          }}
+          className={itemClass}
+        >
+          <Download className="w-3.5 h-3.5" />
+          Download
+        </button>
+      )}
+      <button
+        onClick={() => {
+          onRename(entry);
+          onClose();
+        }}
+        className={itemClass}
+      >
+        <Pencil className="w-3.5 h-3.5" />
+        Rename
+      </button>
+      <button
+        onClick={() => {
+          onCopyPath(entry);
+          onClose();
+        }}
+        className={itemClass}
+      >
+        <Copy className="w-3.5 h-3.5" />
+        Copy Path
+      </button>
+      <div className="my-1 border-t border-border" />
+      <button
+        onClick={() => {
+          onDelete(entry);
+          onClose();
+        }}
+        className={`${itemClass} text-destructive hover:bg-destructive/10`}
+      >
+        <Trash2 className="w-3.5 h-3.5" />
+        Delete
+      </button>
+    </div>
+  );
+}

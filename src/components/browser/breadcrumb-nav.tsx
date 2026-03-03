@@ -1,0 +1,41 @@
+import { ChevronRight, Home } from "lucide-react";
+
+interface BreadcrumbNavProps {
+  currentPath: string;
+  onNavigate: (path: string) => void;
+}
+
+export function BreadcrumbNav({ currentPath, onNavigate }: BreadcrumbNavProps) {
+  const segments = currentPath.split("/").filter(Boolean);
+
+  return (
+    <div className="flex items-center gap-0.5 text-sm min-w-0 overflow-hidden">
+      <button
+        onClick={() => onNavigate("/")}
+        className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <Home className="w-3.5 h-3.5" />
+      </button>
+
+      {segments.map((segment, i) => {
+        const path = "/" + segments.slice(0, i + 1).join("/");
+        const isLast = i === segments.length - 1;
+        return (
+          <div key={path} className="flex items-center gap-0.5 min-w-0">
+            <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
+            <button
+              onClick={() => onNavigate(path)}
+              className={`px-1.5 py-0.5 rounded-md text-sm truncate max-w-[200px] transition-colors ${
+                isLast
+                  ? "font-medium text-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
+              }`}
+            >
+              {segment}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
