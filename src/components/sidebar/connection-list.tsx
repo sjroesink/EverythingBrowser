@@ -5,6 +5,7 @@ interface ConnectionListProps {
   connections: SavedConnection[];
   activeConnectionIds: Set<string>;
   isConnecting: boolean;
+  tabCountByConnection: Map<string, number>;
   onConnect: (config: ConnectionConfig, secret?: string) => void;
   onDisconnect: (connectionId: string) => void;
   onFocusConnection: (connectionId: string) => void;
@@ -16,6 +17,7 @@ export function ConnectionList({
   connections,
   activeConnectionIds,
   isConnecting,
+  tabCountByConnection,
   onConnect,
   onDisconnect,
   onFocusConnection,
@@ -41,6 +43,7 @@ export function ConnectionList({
           connection={conn}
           isActive={activeConnectionIds.has(conn.config.id)}
           isConnecting={isConnecting}
+          tabCount={tabCountByConnection.get(conn.config.id) ?? 0}
           onConnect={onConnect}
           onDisconnect={onDisconnect}
           onFocusConnection={onFocusConnection}

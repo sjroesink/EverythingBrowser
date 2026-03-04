@@ -76,6 +76,34 @@ export async function uploadFile(
   });
 }
 
+export async function copyBetweenConnections(
+  sourceConnectionId: string,
+  sourcePath: string,
+  targetConnectionId: string,
+  targetPath: string,
+  onEvent: (event: TransferEvent) => void
+): Promise<void> {
+  const channel = new Channel<TransferEvent>();
+  channel.onmessage = onEvent;
+  return invoke("copy_between_connections", {
+    sourceConnectionId,
+    sourcePath,
+    targetConnectionId,
+    targetPath,
+    onEvent: channel,
+  });
+}
+
+export async function copyToSystemClipboard(
+  connectionId: string,
+  remotePaths: string[]
+): Promise<void> {
+  return invoke("copy_to_system_clipboard", {
+    connectionId,
+    remotePaths,
+  });
+}
+
 export async function deleteFile(
   connectionId: string,
   path: string

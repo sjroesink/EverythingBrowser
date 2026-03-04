@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::ipc::Channel;
 use tauri::State;
@@ -47,6 +48,158 @@ fn join_remote_path(base: &str, name: &str) -> String {
     }
 }
 
+
+fn dedupe_export_name(name: &str, used_names: &mut HashMap<String, usize>) -> String {
+    let count = used_names.entry(name.to_string()).or_insert(0);
+    if *count == 0 {
+        *count = 1;
+        return name.to_string();
+    }
+
+    let suffix = *count;
+    *count += 1;
+
+    let path = Path::new(name);
+    let stem = path
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| name.to_string());
+
+    match path.extension().map(|value| value.to_string_lossy().to_string()) {
+        Some(extension) if !extension.is_empty() => format!("{} ({}).{}", stem, suffix, extension),
+        _ => format!("{} ({})", stem, suffix),
+    }
+}
+
+async fn cleanup_old_clipboard_exports(root: &Path) {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(24 * 60 * 60))
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+    let Ok(mut entries) = tokio::fs::read_dir(root).await else {
+        return;
+    };
+
+    loop {
+        let Ok(Some(entry)) = entries.next_entry().await else {
+            break;
+        };
+
+        let Ok(metadata) = entry.metadata().await else {
+            continue;
+        };
+
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+
+        if modified >= cutoff {
+            continue;
+        }
+
+        let path = entry.path();
+        if metadata.is_dir() {
+            let _ = tokio::fs::remove_dir_all(path).await;
+        } else {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+    }
+}
+
+#[cfg(windows)]
+fn set_windows_file_clipboard(paths: &[PathBuf]) -> Result<(), AppError> {
+    use std::mem::size_of;
+    use std::ptr::{copy_nonoverlapping, null_mut};
+    use windows_sys::Win32::Foundation::GlobalFree;
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
+    };
+    use windows_sys::Win32::UI::Shell::DROPFILES;
+
+    const CF_HDROP_FORMAT: u32 = 15;
+
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let mut wide_paths: Vec<u16> = Vec::new();
+    for path in paths {
+        wide_paths.extend(path.to_string_lossy().encode_utf16());
+        wide_paths.push(0);
+    }
+    wide_paths.push(0);
+
+    let dropfiles_size = size_of::<DROPFILES>();
+    let path_bytes = wide_paths.len() * size_of::<u16>();
+    let total_size = dropfiles_size + path_bytes;
+
+    unsafe {
+        if OpenClipboard(null_mut()) == 0 {
+            return Err(AppError::Internal(
+                "Failed to open Windows clipboard".to_string(),
+            ));
+        }
+
+        if EmptyClipboard() == 0 {
+            let _ = CloseClipboard();
+            return Err(AppError::Internal(
+                "Failed to clear Windows clipboard".to_string(),
+            ));
+        }
+
+        let hglobal = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, total_size);
+        if hglobal.is_null() {
+            let _ = CloseClipboard();
+            return Err(AppError::Internal(
+                "Failed to allocate clipboard memory".to_string(),
+            ));
+        }
+
+        let ptr = GlobalLock(hglobal) as *mut u8;
+        if ptr.is_null() {
+            let _ = GlobalFree(hglobal);
+            let _ = CloseClipboard();
+            return Err(AppError::Internal(
+                "Failed to lock clipboard memory".to_string(),
+            ));
+        }
+
+        let dropfiles_ptr = ptr as *mut DROPFILES;
+        (*dropfiles_ptr).pFiles = dropfiles_size as u32;
+        (*dropfiles_ptr).pt.x = 0;
+        (*dropfiles_ptr).pt.y = 0;
+        (*dropfiles_ptr).fNC = 0;
+        (*dropfiles_ptr).fWide = 1;
+
+        let files_ptr = ptr.add(dropfiles_size) as *mut u16;
+        copy_nonoverlapping(wide_paths.as_ptr(), files_ptr, wide_paths.len());
+
+        let _ = GlobalUnlock(hglobal);
+
+        if SetClipboardData(CF_HDROP_FORMAT, hglobal).is_null() {
+            let _ = GlobalFree(hglobal);
+            let _ = CloseClipboard();
+            return Err(AppError::Internal(
+                "Failed to set Windows clipboard data".to_string(),
+            ));
+        }
+
+        let _ = CloseClipboard();
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn set_windows_file_clipboard(_paths: &[PathBuf]) -> Result<(), AppError> {
+    Err(AppError::UnsupportedProvider(
+        "Explorer paste is only available on Windows".to_string(),
+    ))
+}
 async fn is_remote_directory(
     manager: &ConnectionManager,
     connection_id: &str,
@@ -308,6 +461,134 @@ pub async fn upload_file(
     }
 }
 
+
+#[tauri::command]
+pub async fn copy_between_connections(
+    source_connection_id: String,
+    source_path: String,
+    target_connection_id: String,
+    target_path: String,
+    on_event: Channel<TransferEvent>,
+    manager: State<'_, ConnectionManager>,
+) -> Result<(), AppError> {
+    let channel = on_event.clone();
+    let progress_cb: Option<crate::provider::ProgressCallback> =
+        Some(Box::new(move |transferred, total| {
+            let _ = channel.send(TransferEvent::Progress {
+                bytes_transferred: transferred,
+                total_bytes: total,
+            });
+        }));
+
+    let _ = on_event.send(TransferEvent::Started { total_bytes: 0 });
+
+    let temp_root = std::env::temp_dir()
+        .join("everythingbrowser")
+        .join("clipboard")
+        .join(uuid::Uuid::new_v4().to_string());
+
+    tokio::fs::create_dir_all(&temp_root)
+        .await
+        .map_err(|e| AppError::TransferFailed(e.to_string()))?;
+
+    let local_name = remote_basename(&source_path);
+    let local_temp_path = temp_root.join(local_name);
+
+    let transfer_result = async {
+        if is_remote_directory(manager.inner(), &source_connection_id, &source_path).await? {
+            download_remote_directory(
+                manager.inner(),
+                &source_connection_id,
+                &source_path,
+                &local_temp_path,
+            )
+            .await?;
+            upload_local_directory(
+                manager.inner(),
+                &target_connection_id,
+                &local_temp_path,
+                &target_path,
+            )
+            .await?;
+        } else {
+            manager
+                .download(
+                    &source_connection_id,
+                    &source_path,
+                    &local_temp_path,
+                    progress_cb,
+                )
+                .await?;
+            manager
+                .upload(&target_connection_id, &local_temp_path, &target_path, None)
+                .await?;
+        }
+        Ok::<(), AppError>(())
+    }
+    .await;
+
+    let _ = tokio::fs::remove_dir_all(&temp_root).await;
+
+    match transfer_result {
+        Ok(()) => {
+            let _ = on_event.send(TransferEvent::Completed);
+            Ok(())
+        }
+        Err(e) => {
+            let _ = on_event.send(TransferEvent::Failed {
+                error: e.to_string(),
+            });
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn copy_to_system_clipboard(
+    connection_id: String,
+    remote_paths: Vec<String>,
+    manager: State<'_, ConnectionManager>,
+) -> Result<(), AppError> {
+    if remote_paths.is_empty() {
+        return Ok(());
+    }
+
+    let clipboard_root = std::env::temp_dir()
+        .join("everythingbrowser")
+        .join("clipboard_exports");
+    tokio::fs::create_dir_all(&clipboard_root)
+        .await
+        .map_err(|e| AppError::TransferFailed(e.to_string()))?;
+
+    cleanup_old_clipboard_exports(&clipboard_root).await;
+
+    let export_dir = clipboard_root.join(uuid::Uuid::new_v4().to_string());
+    tokio::fs::create_dir_all(&export_dir)
+        .await
+        .map_err(|e| AppError::TransferFailed(e.to_string()))?;
+
+    let mut used_names: HashMap<String, usize> = HashMap::new();
+    let mut local_paths: Vec<PathBuf> = Vec::new();
+
+    for remote_path in remote_paths {
+        let base_name = remote_basename(&remote_path);
+        let local_name = dedupe_export_name(&base_name, &mut used_names);
+        let local_path = export_dir.join(local_name);
+
+        if is_remote_directory(manager.inner(), &connection_id, &remote_path).await? {
+            download_remote_directory(manager.inner(), &connection_id, &remote_path, &local_path)
+                .await?;
+        } else {
+            manager
+                .download(&connection_id, &remote_path, &local_path, None)
+                .await?;
+        }
+
+        local_paths.push(local_path);
+    }
+
+    set_windows_file_clipboard(&local_paths)
+}
 #[tauri::command]
 pub async fn delete_file(
     connection_id: String,

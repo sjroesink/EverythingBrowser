@@ -22,6 +22,30 @@ import { Loader2, FolderOpen, Upload } from "lucide-react";
 
 const DRAG_THRESHOLD = 5;
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return (
+    target.isContentEditable ||
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT"
+  );
+}
+
+function parseClipboardPaths(text: string): string[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
+
+  return lines.filter((line) => {
+    if (line.startsWith("\\\\")) return true;
+    if (/^[a-zA-Z]:\\/.test(line)) return true;
+    return line.startsWith("/");
+  });
+}
+
 interface FileBrowserProps {
   connectionId: string;
   isActive?: boolean;
@@ -44,6 +68,9 @@ interface FileBrowserProps {
   onDownload: (entry: FileEntry) => void;
   onUpload: () => void;
   onDropUpload: (localPaths: string[]) => void;
+  onCopyEntries: (entries: FileEntry[]) => void;
+  onPasteIntoPath: (targetPath: string) => void;
+  canPaste: boolean;
 }
 
 export function FileBrowser({
@@ -68,11 +95,15 @@ export function FileBrowser({
   onDownload,
   onUpload,
   onDropUpload,
+  onCopyEntries,
+  onPasteIntoPath,
+  canPaste,
 }: FileBrowserProps) {
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    entry: FileEntry;
+    mode: "entry" | "folder";
+    entry: FileEntry | null;
   } | null>(null);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [newFolderMode, setNewFolderMode] = useState(false);
@@ -157,13 +188,17 @@ export function FileBrowser({
   );
   handleOpenRef.current = handleOpen;
 
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent, entry: FileEntry) => {
-      e.preventDefault();
-      setContextMenu({ x: e.clientX, y: e.clientY, entry });
-    },
-    []
-  );
+  const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, mode: "entry", entry });
+  }, []);
+
+  const handleFolderContextMenu = useCallback((e: React.MouseEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("[data-entry-path]")) return;
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, mode: "folder", entry: null });
+  }, []);
 
   const handleDownload = useCallback(
     (entry: FileEntry) => onDownload(entry),
@@ -194,6 +229,26 @@ export function FileBrowser({
   const handleCopyPath = useCallback((entry: FileEntry) => {
     navigator.clipboard.writeText(entry.path);
   }, []);
+
+  const handleCopyEntry = useCallback(
+    (entry: FileEntry) => {
+      const selectedEntries = entries.filter((item) => selectedPaths.has(item.path));
+      if (selectedPaths.has(entry.path) && selectedEntries.length > 0) {
+        onCopyEntries(selectedEntries);
+        return;
+      }
+      onCopyEntries([entry]);
+    },
+    [entries, selectedPaths, onCopyEntries]
+  );
+
+  const handlePasteInto = useCallback(
+    (targetPath: string) => {
+      if (!canPaste) return;
+      onPasteIntoPath(targetPath);
+    },
+    [canPaste, onPasteIntoPath]
+  );
 
   const handleProperties = useCallback((entry: FileEntry) => {
     setPropertiesPath(entry.path);
@@ -332,6 +387,49 @@ export function FileBrowser({
         e.preventDefault();
         onGoForward();
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
+        if (isEditableTarget(e.target)) return;
+        const selected = entries.filter((entry) => selectedPaths.has(entry.path));
+        if (selected.length > 0) {
+          e.preventDefault();
+          onCopyEntries(selected);
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
+        if (isEditableTarget(e.target)) return;
+        if (canPaste) {
+          e.preventDefault();
+          onPasteIntoPath(currentPath);
+        }
+      }
+    };
+
+    const handlePasteEvent = (e: ClipboardEvent) => {
+      if (isEditableTarget(e.target)) return;
+
+      const files = Array.from(e.clipboardData?.files ?? []);
+      const filePaths = files
+        .map((file) => (file as File & { path?: string }).path)
+        .filter((value): value is string => Boolean(value));
+
+      if (filePaths.length > 0) {
+        e.preventDefault();
+        onDropUpload(filePaths);
+        return;
+      }
+
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      const localPaths = parseClipboardPaths(text);
+      if (localPaths.length > 0) {
+        e.preventDefault();
+        onDropUpload(localPaths);
+        return;
+      }
+
+      if (canPaste) {
+        e.preventDefault();
+        onPasteIntoPath(currentPath);
+      }
     };
 
     // Mouse back/forward buttons (buttons 3 & 4)
@@ -348,11 +446,28 @@ export function FileBrowser({
 
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("mouseup", handleMouseUpNav);
+    window.addEventListener("paste", handlePasteEvent);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("mouseup", handleMouseUpNav);
+      window.removeEventListener("paste", handlePasteEvent);
     };
-  }, [isActive, onRefresh, onGoUp, onGoBack, onGoForward, renamingPath, newFolderMode]);
+  }, [
+    isActive,
+    onRefresh,
+    onGoUp,
+    onGoBack,
+    onGoForward,
+    renamingPath,
+    newFolderMode,
+    entries,
+    selectedPaths,
+    onCopyEntries,
+    canPaste,
+    onPasteIntoPath,
+    currentPath,
+    onDropUpload,
+  ]);
 
   // Tauri native file drop from desktop
   useEffect(() => {
@@ -595,7 +710,7 @@ export function FileBrowser({
       )}
 
       {/* Content area */}
-      <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 flex flex-col min-h-0" onContextMenu={handleFolderContextMenu}>
         {error ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
@@ -655,6 +770,7 @@ export function FileBrowser({
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
+          mode={contextMenu.mode}
           entry={contextMenu.entry}
           onClose={() => setContextMenu(null)}
           onDownload={handleDownload}
@@ -662,8 +778,14 @@ export function FileBrowser({
           onRename={handleRename}
           onOpen={handleOpen}
           onCopyPath={handleCopyPath}
+          onCopy={handleCopyEntry}
+          onPasteInto={handlePasteInto}
           onProperties={handleProperties}
+          onRefresh={onRefresh}
+          onNewFolder={handleNewFolder}
+          currentPath={currentPath}
           showProperties={Boolean(capabilities?.fileProperties)}
+          canPaste={canPaste}
         />
       )}
 
@@ -718,3 +840,4 @@ export function FileBrowser({
     </div>
   );
 }
+

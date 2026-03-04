@@ -1,20 +1,31 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { Titlebar } from "@/components/layout/titlebar";
 import { Sidebar } from "@/components/layout/sidebar";
 import { StatusBar } from "@/components/layout/status-bar";
-import { TabBar } from "@/components/browser/tab-bar";
-import { FileBrowserTab } from "@/components/browser/file-browser-tab";
-import { ConnectionDialog } from "@/components/connections/connection-dialog";
+import { LayoutRenderer } from "@/components/layout/layout-renderer";
+import { DockingOverlay } from "@/components/layout/docking-overlay";
 import { TransferPanel } from "@/components/transfers/transfer-panel";
+import { ConnectionDialog } from "@/components/connections/connection-dialog";
 import { ImportDialog } from "@/components/onboarding/import-dialog";
+import {
+  FileBrowserProvider,
+  type FileBrowserCallbacks,
+} from "@/contexts/file-browser-context";
 import { useTheme } from "@/hooks/use-theme";
 import { useConnections } from "@/hooks/use-connections";
 import { useTransferQueue } from "@/hooks/use-transfer-queue";
 import { useTabsStore } from "@/stores/use-tabs-store";
-import type { ConnectionConfig } from "@/types/connection";
+import { useLayoutStore } from "@/stores/use-layout-store";
+import type { ConnectionConfig, Tab } from "@/types/connection";
 import type { FileEntry } from "@/types/filesystem";
-import { FolderOpen } from "lucide-react";
+import { copyToSystemClipboard } from "@/services/file-service";
+
+interface ClipboardSelection {
+  sourceConnectionId: string;
+  entries: Pick<FileEntry, "path" | "name" | "isDir">[];
+}
 
 export default function App() {
   const { theme, setTheme } = useTheme();
@@ -23,7 +34,6 @@ export default function App() {
     activeConnectionIds,
     isConnecting,
     isLoaded: connectionsLoaded,
-    error: connectionError,
     addConnection,
     addConnections,
     updateConnection,
@@ -34,47 +44,44 @@ export default function App() {
 
   const transfers = useTransferQueue();
 
-  const tabs = useTabsStore((state) => state.tabs);
-  const activeTabId = useTabsStore((state) => state.activeTabId);
-  const openTabInStore = useTabsStore((state) => state.openTab);
-  const closeTabInStore = useTabsStore((state) => state.closeTab);
-  const setActiveTab = useTabsStore((state) => state.setActiveTab);
-  const setTabPath = useTabsStore((state) => state.setTabPath);
+  const tabs = useTabsStore((s) => s.tabs);
+  const openTabInStore = useTabsStore((s) => s.openTab);
+  const closeTabInStore = useTabsStore((s) => s.closeTab);
+
+  const root = useLayoutStore((s) => s.root);
+  const sidebarCollapsed = useLayoutStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useLayoutStore((s) => s.toggleSidebar);
+  const tabDrag = useLayoutStore((s) => s.tabDrag);
+  const addTabToPane = useLayoutStore((s) => s.addTabToPane);
+  const getFirstPaneId = useLayoutStore((s) => s.getFirstPaneId);
 
   const [tabsHydrated, setTabsHydrated] = useState(() =>
     useTabsStore.persist.hasHydrated()
   );
   const restoredTabsRef = useRef(false);
 
-  const resolvedTabs = tabs.map((tab) => {
-    const savedConnection = savedConnections.find(
-      (conn) => conn.config.id === tab.connectionId
-    );
-    return savedConnection ? { ...tab, config: savedConnection.config } : tab;
-  });
-
-  const activeTab = resolvedTabs.find((t) => t.id === activeTabId) ?? null;
-
   const [showConnectionDialog, setShowConnectionDialog] = useState(false);
   const [editingConfig, setEditingConfig] = useState<ConnectionConfig | null>(
     null
   );
   const [showTransfers, setShowTransfers] = useState(false);
+  const [clipboardSelection, setClipboardSelection] =
+    useState<ClipboardSelection | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
 
+  // Hydration
   useEffect(() => {
     const unsubscribe = useTabsStore.persist.onFinishHydration(() => {
       setTabsHydrated(true);
     });
-
     return unsubscribe;
   }, []);
 
+  // Restore connections on load
   useEffect(() => {
     if (!tabsHydrated || !connectionsLoaded || restoredTabsRef.current) return;
-
     restoredTabsRef.current = true;
 
     for (const tab of tabs) {
@@ -82,17 +89,28 @@ export default function App() {
         (conn) => conn.config.id === tab.connectionId
       );
       const config = savedConnection?.config ?? tab.config;
-
-      void connect(config).catch(() => {
-        // Error state is handled in useConnections
-      });
+      void connect(config).catch(() => {});
     }
   }, [tabsHydrated, connectionsLoaded, tabs, savedConnections, connect]);
+
+  // Sync tabs into layout panes on hydration
+  useEffect(() => {
+    if (!tabsHydrated) return;
+
+    // Ensure all tabs are assigned to a pane
+    const layoutState = useLayoutStore.getState();
+    for (const tab of tabs) {
+      const paneId = layoutState.findPaneForTab(tab.id);
+      if (!paneId) {
+        const firstPaneId = layoutState.getFirstPaneId();
+        layoutState.addTabToPane(firstPaneId, tab.id);
+      }
+    }
+  }, [tabsHydrated, tabs]);
 
   // Show onboarding when no saved connections on first load
   useEffect(() => {
     if (!connectionsLoaded) return;
-
     if (!onboardingChecked && savedConnections.length === 0) {
       const timer = setTimeout(() => {
         if (savedConnections.length === 0) {
@@ -107,6 +125,36 @@ export default function App() {
     }
   }, [connectionsLoaded, savedConnections, onboardingChecked]);
 
+  // Ctrl+B to toggle sidebar
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "b") {
+        e.preventDefault();
+        toggleSidebar();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [toggleSidebar]);
+
+  // Listen for tabs reattaching from closed detached windows
+  useEffect(() => {
+    const unlisten = listen<{ tabs: Tab[] }>("tab-reattach", (event) => {
+      const { tabs: reattachedTabs } = event.payload;
+      for (const tab of reattachedTabs) {
+        // Re-add to global tab store
+        const tabId = openTabInStore(tab.config, tab.connectionId);
+        // Add to first pane in layout
+        const paneId = useLayoutStore.getState().getFirstPaneId();
+        useLayoutStore.getState().addTabToPane(paneId, tabId);
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [openTabInStore]);
+
   const handleImportComplete = useCallback(
     async (configs: ConnectionConfig[]) => {
       await addConnections(configs);
@@ -116,9 +164,12 @@ export default function App() {
 
   const openTab = useCallback(
     (config: ConnectionConfig, connectionId: string) => {
-      openTabInStore(config, connectionId);
+      const tabId = openTabInStore(config, connectionId);
+      // Add the new tab to the first pane (or focused pane)
+      const paneId = getFirstPaneId();
+      addTabToPane(paneId, tabId);
     },
-    [openTabInStore]
+    [openTabInStore, getFirstPaneId, addTabToPane]
   );
 
   const closeTab = useCallback(
@@ -158,10 +209,13 @@ export default function App() {
     (connectionId: string) => {
       const tab = tabs.find((t) => t.connectionId === connectionId);
       if (tab) {
-        setActiveTab(tab.id);
+        const paneId = useLayoutStore.getState().findPaneForTab(tab.id);
+        if (paneId) {
+          useLayoutStore.getState().setActiveTabInPane(paneId, tab.id);
+        }
       }
     },
-    [tabs, setActiveTab]
+    [tabs]
   );
 
   const handleSaveConnection = useCallback(
@@ -249,6 +303,112 @@ export default function App() {
     [transfers]
   );
 
+  const handleCopyEntries = useCallback(
+    (sourceConnectionId: string, entries: FileEntry[]) => {
+      if (entries.length === 0) return;
+
+      setClipboardSelection({
+        sourceConnectionId,
+        entries: entries.map((entry) => ({
+          path: entry.path,
+          name: entry.name,
+          isDir: entry.isDir,
+        })),
+      });
+
+      void copyToSystemClipboard(
+        sourceConnectionId,
+        entries.map((entry) => entry.path)
+      ).catch((error) => {
+        console.warn("System clipboard sync failed:", error);
+      });
+    },
+    []
+  );
+
+  const handlePaste = useCallback(
+    (
+      targetConnectionId: string,
+      targetPath: string,
+      onPasted?: () => void
+    ) => {
+      if (!clipboardSelection || clipboardSelection.entries.length === 0) return;
+
+      for (const entry of clipboardSelection.entries) {
+        const destinationPath =
+          targetPath === "/"
+            ? `/${entry.name}`
+            : `${targetPath}/${entry.name}`;
+
+        transfers.enqueueRemoteCopy(
+          clipboardSelection.sourceConnectionId,
+          entry.path,
+          targetConnectionId,
+          destinationPath,
+          entry.name,
+          onPasted
+        );
+      }
+
+      setShowTransfers(true);
+    },
+    [clipboardSelection, transfers]
+  );
+
+  const fileBrowserCallbacks = useMemo<FileBrowserCallbacks>(
+    () => ({
+      onDownload: handleDownload,
+      onUpload: handleUpload,
+      onDropUpload: handleDropUpload,
+      onCopyEntries: handleCopyEntries,
+      onPaste: handlePaste,
+      canPaste: Boolean(clipboardSelection),
+      activeConnectionIds,
+    }),
+    [
+      handleDownload,
+      handleUpload,
+      handleDropUpload,
+      handleCopyEntries,
+      handlePaste,
+      clipboardSelection,
+      activeConnectionIds,
+    ]
+  );
+
+  const tabCountByConnection = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const tab of tabs) {
+      counts.set(tab.connectionId, (counts.get(tab.connectionId) ?? 0) + 1);
+    }
+    return counts;
+  }, [tabs]);
+
+  // Find the active tab across all panes for the status bar
+  const activeConfig = useMemo(() => {
+    // Walk the tree to find first pane with an activeTabId
+    const findActiveTab = (
+      node: typeof root
+    ): ConnectionConfig | null => {
+      if (node.type === "pane") {
+        if (node.activeTabId) {
+          const tab = tabs.find((t) => t.id === node.activeTabId);
+          if (tab) {
+            const saved = savedConnections.find(
+              (c) => c.config.id === tab.connectionId
+            );
+            return saved?.config ?? tab.config;
+          }
+        }
+        return null;
+      }
+      return (
+        findActiveTab(node.children[0]) ?? findActiveTab(node.children[1])
+      );
+    };
+    return findActiveTab(root);
+  }, [root, tabs, savedConnections]);
+
   return (
     <div className="flex flex-col h-screen bg-background">
       <Titlebar />
@@ -258,7 +418,9 @@ export default function App() {
           savedConnections={savedConnections}
           activeConnectionIds={activeConnectionIds}
           isConnecting={isConnecting}
+          tabCountByConnection={tabCountByConnection}
           theme={theme}
+          collapsed={sidebarCollapsed}
           onSetTheme={setTheme}
           onConnect={handleConnect}
           onDisconnect={handleDisconnect}
@@ -273,52 +435,20 @@ export default function App() {
           }}
           onRemoveConnection={removeConnection}
           onImport={() => setShowImportDialog(true)}
+          onToggleCollapse={toggleSidebar}
         />
 
         <div className="flex-1 flex flex-col min-w-0">
-          <TabBar
-            tabs={resolvedTabs}
-            activeTabId={activeTabId}
-            onSelectTab={setActiveTab}
-            onCloseTab={closeTab}
-          />
+          <div className="flex-1 min-h-0 relative">
+            <FileBrowserProvider value={fileBrowserCallbacks}>
+              <LayoutRenderer
+                node={root}
+                savedConnections={savedConnections}
+              />
+            </FileBrowserProvider>
 
-          {resolvedTabs.length > 0 ? (
-            <div className="flex-1 relative min-h-0">
-              {resolvedTabs.map((tab) => (
-                <FileBrowserTab
-                  key={tab.id}
-                  tabId={tab.id}
-                  connectionId={tab.connectionId}
-                  config={tab.config}
-                  isVisible={tab.id === activeTabId}
-                  isConnected={activeConnectionIds.has(tab.connectionId)}
-                  initialPath={tab.currentPath}
-                  onPathChange={setTabPath}
-                  onDownload={handleDownload}
-                  onUpload={handleUpload}
-                  onDropUpload={handleDropUpload}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center">
-                <FolderOpen className="w-16 h-16 mx-auto mb-4 text-muted-foreground/20" />
-                <h2 className="text-lg font-medium text-muted-foreground/60 mb-1">
-                  No Connection
-                </h2>
-                <p className="text-sm text-muted-foreground/40">
-                  Double-click a connection in the sidebar to get started
-                </p>
-                {connectionError && (
-                  <p className="text-sm text-destructive mt-3">
-                    {connectionError}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
+            {tabDrag && <DockingOverlay />}
+          </div>
 
           <TransferPanel
             isOpen={showTransfers}
@@ -330,7 +460,7 @@ export default function App() {
       </div>
 
       <StatusBar
-        activeConfig={activeTab?.config ?? null}
+        activeConfig={activeConfig}
         transferCount={transfers.activeCount}
         onToggleTransfers={() => setShowTransfers(!showTransfers)}
       />

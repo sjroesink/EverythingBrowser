@@ -1,4 +1,4 @@
-import { Upload, Download, Check, X, Loader2 } from "lucide-react";
+import { Upload, Download, Check, X, Loader2, Copy } from "lucide-react";
 import { formatBytes } from "@/lib/utils";
 import type { TransferJob } from "@/types/transfer";
 
@@ -33,6 +33,8 @@ export function TransferItem({ transfer }: TransferItemProps) {
         <span className="shrink-0">
           {transfer.direction === "download" ? (
             <Download className="w-3.5 h-3.5 text-muted-foreground" />
+          ) : transfer.direction === "copy" ? (
+            <Copy className="w-3.5 h-3.5 text-muted-foreground" />
           ) : (
             <Upload className="w-3.5 h-3.5 text-muted-foreground" />
           )}

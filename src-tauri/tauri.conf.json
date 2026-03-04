@@ -28,6 +28,17 @@
   "plugins": {
     "shell": {
       "open": true
+    },
+    "cli": {
+      "description": "A file transfer client for SFTP and Backblaze B2",
+      "args": [
+        {
+          "name": "connect",
+          "short": "c",
+          "takesValue": true,
+          "description": "Open a saved connection by name or ID"
+        }
+      ]
     }
   }
 }

@@ -1,4 +1,4 @@
-export type TransferDirection = "upload" | "download";
+export type TransferDirection = "upload" | "download" | "copy";
 export type TransferStatus =
   | "queued"
   | "in_progress"

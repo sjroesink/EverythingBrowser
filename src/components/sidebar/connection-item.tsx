@@ -6,6 +6,7 @@ interface ConnectionItemProps {
   connection: SavedConnection;
   isActive: boolean;
   isConnecting: boolean;
+  tabCount: number;
   onConnect: (config: ConnectionConfig, secret?: string) => void;
   onDisconnect: (connectionId: string) => void;
   onFocusConnection: (connectionId: string) => void;
@@ -17,6 +18,7 @@ export function ConnectionItem({
   connection,
   isActive,
   isConnecting,
+  tabCount,
   onConnect,
   onDisconnect,
   onFocusConnection,
@@ -58,12 +60,7 @@ export function ConnectionItem({
   };
 
   const handleDoubleClick = () => {
-    if (isActive) {
-      // Tab already open, focus it
-      onFocusConnection(config.id);
-    } else {
-      onConnect(config);
-    }
+    onConnect(config);
   };
 
   return (
@@ -86,7 +83,14 @@ export function ConnectionItem({
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium truncate">{config.name}</div>
+          <div className="text-sm font-medium truncate flex items-center gap-1.5">
+            {config.name}
+            {tabCount > 1 && (
+              <span className="inline-flex items-center justify-center min-w-[1.125rem] h-[1.125rem] px-1 text-[10px] font-semibold rounded-full bg-primary/15 text-primary">
+                {tabCount}
+              </span>
+            )}
+          </div>
           <div className="text-xs text-muted-foreground truncate">
             {getSubtitle()}
           </div>

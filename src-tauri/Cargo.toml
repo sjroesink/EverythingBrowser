@@ -16,6 +16,8 @@ tauri-plugin-store = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-drag = "2"
+tauri-plugin-cli = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -31,3 +33,4 @@ log = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_Shell"] }

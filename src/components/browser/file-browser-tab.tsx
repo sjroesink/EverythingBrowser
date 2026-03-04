@@ -24,6 +24,13 @@ interface FileBrowserTabProps {
     localPaths: string[],
     onUploaded?: () => void
   ) => void;
+  onCopyEntries: (connectionId: string, entries: FileEntry[]) => void;
+  onPaste: (
+    targetConnectionId: string,
+    targetPath: string,
+    onPasted?: () => void
+  ) => void;
+  canPaste: boolean;
 }
 
 export function FileBrowserTab({
@@ -37,6 +44,9 @@ export function FileBrowserTab({
   onDownload,
   onUpload,
   onDropUpload,
+  onCopyEntries,
+  onPaste,
+  canPaste,
 }: FileBrowserTabProps) {
   const browser = useFileBrowser(connectionId, initialPath);
   const refreshTimerRef = useRef<number | null>(null);
@@ -101,6 +111,17 @@ export function FileBrowserTab({
     [connectionId, browser.currentPath, onDropUpload, scheduleRefreshAfterUpload]
   );
 
+  const handleCopyEntries = useCallback(
+    (entries: FileEntry[]) => onCopyEntries(connectionId, entries),
+    [connectionId, onCopyEntries]
+  );
+
+  const handlePaste = useCallback(
+    (targetPath: string) =>
+      onPaste(connectionId, targetPath, scheduleRefreshAfterUpload),
+    [connectionId, onPaste, scheduleRefreshAfterUpload]
+  );
+
   return (
     <div
       style={{ display: isVisible ? "flex" : "none" }}
@@ -128,6 +149,9 @@ export function FileBrowserTab({
         onDownload={handleDownload}
         onUpload={handleUpload}
         onDropUpload={handleDropUpload}
+        onCopyEntries={handleCopyEntries}
+        onPasteIntoPath={handlePaste}
+        canPaste={canPaste}
       />
     </div>
   );

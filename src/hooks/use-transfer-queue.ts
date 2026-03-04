@@ -1,6 +1,10 @@
 import { useState, useCallback } from "react";
 import type { TransferJob, TransferEvent } from "@/types/transfer";
-import { downloadFile, uploadFile } from "@/services/file-service";
+import {
+  copyBetweenConnections,
+  downloadFile,
+  uploadFile,
+} from "@/services/file-service";
 
 export function useTransferQueue() {
   const [transfers, setTransfers] = useState<TransferJob[]>([]);
@@ -139,6 +143,75 @@ export function useTransferQueue() {
     [updateTransfer]
   );
 
+  const enqueueRemoteCopy = useCallback(
+    (
+      sourceConnectionId: string,
+      sourcePath: string,
+      targetConnectionId: string,
+      targetPath: string,
+      fileName: string,
+      onCompleted?: () => void
+    ) => {
+      const id = crypto.randomUUID();
+      const job: TransferJob = {
+        id,
+        connectionId: targetConnectionId,
+        direction: "copy",
+        remotePath: targetPath,
+        localPath: sourcePath,
+        fileName,
+        totalBytes: 0,
+        transferredBytes: 0,
+        status: "queued",
+        startedAt: Date.now(),
+      };
+
+      setTransfers((prev) => [...prev, job]);
+      updateTransfer(id, { status: "in_progress" });
+
+      copyBetweenConnections(
+        sourceConnectionId,
+        sourcePath,
+        targetConnectionId,
+        targetPath,
+        (event: TransferEvent) => {
+          switch (event.event) {
+            case "started":
+              updateTransfer(id, {
+                totalBytes: event.data.totalBytes,
+                status: "in_progress",
+              });
+              break;
+            case "progress":
+              updateTransfer(id, {
+                transferredBytes: event.data.bytesTransferred,
+                totalBytes: event.data.totalBytes,
+              });
+              break;
+            case "completed":
+              updateTransfer(id, { status: "completed" });
+              onCompleted?.();
+              break;
+            case "failed":
+              updateTransfer(id, {
+                status: "failed",
+                error: event.data.error,
+              });
+              break;
+          }
+        }
+      ).catch((e) => {
+        updateTransfer(id, {
+          status: "failed",
+          error: String(e),
+        });
+      });
+
+      return id;
+    },
+    [updateTransfer]
+  );
+
   const clearCompleted = useCallback(() => {
     setTransfers((prev) =>
       prev.filter((t) => t.status !== "completed" && t.status !== "failed")
@@ -153,6 +226,7 @@ export function useTransferQueue() {
     transfers,
     enqueueDownload,
     enqueueUpload,
+    enqueueRemoteCopy,
     clearCompleted,
     activeCount,
   };
