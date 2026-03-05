@@ -30,6 +30,9 @@ rust-s3 = { version = "0.37", default-features = false, features = ["tokio-rustl
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 chrono = { version = "0.4", features = ["serde"] }
 log = "0.4"
+bollard = "0.18"
+futures-util = "0.3"
+tar = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 pub enum ConnectionConfig {
     Sftp(SftpConfig),
     BackblazeB2(B2Config),
+    DockerVolume(DockerVolumeConfig),
+    DockerExec(DockerExecConfig),
+    LocalFs(LocalFsConfig),
 }
 
 impl ConnectionConfig {
@@ -12,6 +15,9 @@ impl ConnectionConfig {
         match self {
             ConnectionConfig::Sftp(c) => &c.id,
             ConnectionConfig::BackblazeB2(c) => &c.id,
+            ConnectionConfig::DockerVolume(c) => &c.id,
+            ConnectionConfig::DockerExec(c) => &c.id,
+            ConnectionConfig::LocalFs(c) => &c.id,
         }
     }
 
@@ -19,6 +25,9 @@ impl ConnectionConfig {
         match self {
             ConnectionConfig::Sftp(c) => &c.name,
             ConnectionConfig::BackblazeB2(c) => &c.name,
+            ConnectionConfig::DockerVolume(c) => &c.name,
+            ConnectionConfig::DockerExec(c) => &c.name,
+            ConnectionConfig::LocalFs(c) => &c.name,
         }
     }
 }
@@ -60,6 +69,32 @@ pub struct B2Config {
     pub region: String,
     pub endpoint: Option<String>,
     pub prefix: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerVolumeConfig {
+    pub id: String,
+    pub name: String,
+    pub volume_name: String,
+    pub image: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerExecConfig {
+    pub id: String,
+    pub name: String,
+    pub container: String,
+    pub default_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalFsConfig {
+    pub id: String,
+    pub name: String,
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,8 +1,12 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X, Copy } from "lucide-react";
+import { Minus, Square, X, Copy, Settings } from "lucide-react";
 import { useState, useEffect } from "react";
 
-export function Titlebar() {
+interface TitlebarProps {
+  onOpenSettings?: () => void;
+}
+
+export function Titlebar({ onOpenSettings }: TitlebarProps) {
   const [isMaximized, setIsMaximized] = useState(false);
   const appWindow = getCurrentWindow();
 
@@ -28,6 +32,15 @@ export function Titlebar() {
       </div>
 
       <div className="flex">
+        {onOpenSettings && (
+          <button
+            onClick={onOpenSettings}
+            className="inline-flex items-center justify-center w-11 h-8 hover:bg-foreground/10 transition-colors"
+            title="Settings"
+          >
+            <Settings className="w-3.5 h-3.5 text-foreground/70" />
+          </button>
+        )}
         <button
           onClick={() => appWindow.minimize()}
           className="inline-flex items-center justify-center w-11 h-8 hover:bg-foreground/10 transition-colors"

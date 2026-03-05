@@ -1,4 +1,4 @@
-import { Server, Cloud, MoreHorizontal, Pencil, Trash2, XCircle } from "lucide-react";
+import { Server, Cloud, HardDrive, Terminal, FolderOpen, MoreHorizontal, Pencil, Trash2, XCircle } from "lucide-react";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useLayoutStore } from "@/stores/use-layout-store";
 import type { ConnectionConfig, SavedConnection } from "@/types/connection";
@@ -49,6 +49,12 @@ export function ConnectionItem({
         return <Server className="w-4 h-4" />;
       case "BackblazeB2":
         return <Cloud className="w-4 h-4" />;
+      case "DockerVolume":
+        return <HardDrive className="w-4 h-4" />;
+      case "DockerExec":
+        return <Terminal className="w-4 h-4" />;
+      case "LocalFs":
+        return <FolderOpen className="w-4 h-4" />;
     }
   };
 
@@ -58,6 +64,12 @@ export function ConnectionItem({
         return `${config.host}:${config.port}`;
       case "BackblazeB2":
         return config.bucketName;
+      case "DockerVolume":
+        return config.volumeName;
+      case "DockerExec":
+        return config.container;
+      case "LocalFs":
+        return config.path;
     }
   };
 

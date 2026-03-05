@@ -7,6 +7,7 @@ import {
   Settings2,
   RefreshCw,
   FolderPlus,
+  FileEdit,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { FileEntry } from "@/types/filesystem";
@@ -16,9 +17,11 @@ interface ContextMenuProps {
   y: number;
   entry: FileEntry | null;
   mode: "entry" | "folder";
+  selectedCount: number;
   onClose: () => void;
   onDownload: (entry: FileEntry) => void;
   onDelete: (entry: FileEntry) => void;
+  onDeleteSelected: () => void;
   onRename: (entry: FileEntry) => void;
   onOpen: (entry: FileEntry) => void;
   onCopyPath: (entry: FileEntry) => void;
@@ -27,9 +30,11 @@ interface ContextMenuProps {
   onProperties: (entry: FileEntry) => void;
   onRefresh: () => void;
   onNewFolder: () => void;
+  onEditInEditor?: (entry: FileEntry) => void;
   currentPath: string;
   showProperties: boolean;
   canPaste: boolean;
+  hasEditor: boolean;
 }
 
 export function ContextMenu({
@@ -37,9 +42,11 @@ export function ContextMenu({
   y,
   entry,
   mode,
+  selectedCount,
   onClose,
   onDownload,
   onDelete,
+  onDeleteSelected,
   onRename,
   onOpen,
   onCopyPath,
@@ -48,9 +55,11 @@ export function ContextMenu({
   onProperties,
   onRefresh,
   onNewFolder,
+  onEditInEditor,
   currentPath,
   showProperties,
   canPaste,
+  hasEditor,
 }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -119,6 +128,41 @@ export function ContextMenu({
 
   if (!entry) return null;
 
+  const isMulti = selectedCount > 1;
+
+  // Multi-selection: show only actions that apply to multiple items
+  if (isMulti) {
+    return (
+      <div
+        ref={ref}
+        className="fixed z-50 w-48 bg-popover border border-border rounded-lg shadow-lg py-1"
+        style={{ left: x, top: y }}
+      >
+        <button
+          onClick={() => {
+            onCopy(entry);
+            onClose();
+          }}
+          className={itemClass}
+        >
+          <Copy className="w-3.5 h-3.5" />
+          Copy ({selectedCount})
+        </button>
+        <div className="my-1 border-t border-border" />
+        <button
+          onClick={() => {
+            onDeleteSelected();
+            onClose();
+          }}
+          className={`${itemClass} text-destructive hover:bg-destructive/10`}
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          Delete ({selectedCount})
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={ref}
@@ -147,6 +191,18 @@ export function ContextMenu({
         >
           <Download className="w-3.5 h-3.5" />
           Download
+        </button>
+      )}
+      {!entry.isDir && hasEditor && onEditInEditor && (
+        <button
+          onClick={() => {
+            onEditInEditor(entry);
+            onClose();
+          }}
+          className={itemClass}
+        >
+          <FileEdit className="w-3.5 h-3.5" />
+          Edit in Editor
         </button>
       )}
       <button

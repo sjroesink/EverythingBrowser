@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EverythingBrowser — Modern File Management</title>
+  <meta name="description" content="A powerful desktop file manager that connects to SFTP, Backblaze B2, Docker volumes, and local filesystems in one unified interface.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+    :root {
+      --bg: #ffffff;
+      --bg-alt: #f8f9fb;
+      --bg-card: #ffffff;
+      --text: #111218;
+      --text-muted: #6b7080;
+      --accent: #3b6cf5;
+      --accent-hover: #2d5ae0;
+      --border: #e5e7ec;
+      --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+      --shadow-lg: 0 10px 30px rgba(0,0,0,0.08);
+      --radius: 16px;
+      --icon-stroke: #3b6cf5;
+      --tag-bg: #eef2ff;
+      --tag-text: #3b6cf5;
+    }
+
+    [data-theme="dark"] {
+      --bg: #0e0f14;
+      --bg-alt: #161820;
+      --bg-card: #1a1c26;
+      --text: #e8e9ed;
+      --text-muted: #8b8fa0;
+      --accent: #6b8ef7;
+      --accent-hover: #8ba6ff;
+      --border: #2a2d3a;
+      --shadow: 0 1px 3px rgba(0,0,0,0.3);
+      --shadow-lg: 0 10px 30px rgba(0,0,0,0.4);
+      --icon-stroke: #6b8ef7;
+      --tag-bg: #1e2336;
+      --tag-text: #6b8ef7;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      color-scheme: light dark;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    /* ---- Theme Toggle ---- */
+    .theme-toggle {
+      position: fixed;
+      top: 24px;
+      right: 24px;
+      z-index: 100;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      padding: 6px;
+      display: flex;
+      gap: 2px;
+      box-shadow: var(--shadow);
+    }
+    .theme-toggle button {
+      background: none;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 99px;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-family: inherit;
+      font-weight: 500;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .theme-toggle button.active {
+      background: var(--accent);
+      color: #fff;
+    }
+    .theme-toggle button:not(.active):hover {
+      color: var(--text);
+    }
+    .theme-toggle svg { width: 16px; height: 16px; }
+
+    /* ---- Nav ---- */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 50;
+      padding: 20px 40px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: color-mix(in srgb, var(--bg) 80%, transparent);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+    }
+    nav .logo {
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: var(--text);
+      text-decoration: none;
+    }
+    nav .logo span { color: var(--accent); }
+
+    /* ---- Sections ---- */
+    section { padding: 120px 40px; }
+    .container { max-width: 1100px; margin: 0 auto; }
+
+    /* ---- Hero ---- */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding-top: 80px;
+    }
+    .hero-inner { max-width: 800px; }
+    .hero .tag {
+      display: inline-block;
+      background: var(--tag-bg);
+      color: var(--tag-text);
+      font-size: 14px;
+      font-weight: 600;
+      padding: 8px 20px;
+      border-radius: 99px;
+      margin-bottom: 32px;
+    }
+    .hero h1 {
+      font-size: clamp(48px, 6vw, 80px);
+      font-weight: 800;
+      line-height: 1.05;
+      letter-spacing: -2px;
+      margin-bottom: 28px;
+    }
+    .hero h1 span {
+      background: linear-gradient(135deg, var(--accent), #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .hero p {
+      font-size: 20px;
+      line-height: 1.7;
+      color: var(--text-muted);
+      max-width: 600px;
+      margin: 0 auto 48px;
+    }
+    .hero-buttons {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 36px;
+      border-radius: 99px;
+      font-size: 16px;
+      font-weight: 600;
+      font-family: inherit;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
+    .btn-secondary {
+      background: var(--bg-card);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+    .btn svg { width: 20px; height: 20px; }
+
+    /* ---- Connections Grid ---- */
+    .connections {
+      background: var(--bg-alt);
+    }
+    .section-header {
+      text-align: center;
+      margin-bottom: 80px;
+    }
+    .section-header .label {
+      font-size: 14px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--accent);
+      margin-bottom: 16px;
+    }
+    .section-header h2 {
+      font-size: clamp(36px, 4vw, 52px);
+      font-weight: 800;
+      letter-spacing: -1.5px;
+      line-height: 1.1;
+      margin-bottom: 20px;
+    }
+    .section-header p {
+      font-size: 18px;
+      color: var(--text-muted);
+      max-width: 560px;
+      margin: 0 auto;
+    }
+
+    .conn-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px;
+    }
+    .conn-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 40px 32px;
+      box-shadow: var(--shadow);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .conn-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg);
+    }
+    .conn-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 14px;
+      background: var(--tag-bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 24px;
+    }
+    .conn-icon svg { width: 28px; height: 28px; stroke: var(--icon-stroke); fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    .conn-card h3 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 12px;
+      letter-spacing: -0.3px;
+    }
+    .conn-card p {
+      font-size: 15px;
+      color: var(--text-muted);
+      line-height: 1.7;
+    }
+
+    /* ---- Features ---- */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 64px 48px;
+    }
+    .feature-item {
+      display: flex;
+      gap: 20px;
+    }
+    .feature-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 99px;
+      background: var(--accent);
+      flex-shrink: 0;
+      margin-top: 8px;
+    }
+    .feature-item h3 {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      letter-spacing: -0.3px;
+    }
+    .feature-item p {
+      font-size: 15px;
+      color: var(--text-muted);
+      line-height: 1.7;
+    }
+
+    /* ---- CTA ---- */
+    .cta {
+      text-align: center;
+      background: var(--bg-alt);
+    }
+    .cta h2 {
+      font-size: clamp(36px, 4vw, 52px);
+      font-weight: 800;
+      letter-spacing: -1.5px;
+      margin-bottom: 20px;
+    }
+    .cta p {
+      font-size: 18px;
+      color: var(--text-muted);
+      max-width: 520px;
+      margin: 0 auto 48px;
+    }
+
+    /* ---- Footer ---- */
+    footer {
+      padding: 48px 40px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 14px;
+      border-top: 1px solid var(--border);
+    }
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    footer a:hover { text-decoration: underline; }
+
+    /* ---- Responsive ---- */
+    @media (max-width: 640px) {
+      section { padding: 80px 20px; }
+      nav { padding: 16px 20px; }
+      .theme-toggle { top: 16px; right: 16px; }
+      .theme-toggle button { padding: 6px 10px; font-size: 12px; }
+      .conn-grid { grid-template-columns: 1fr; }
+      .features-grid { grid-template-columns: 1fr; gap: 40px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Theme Toggle -->
+  <div class="theme-toggle" role="radiogroup" aria-label="Color theme">
+    <button id="theme-light" aria-label="Light theme" onclick="setTheme('light')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+    </button>
+    <button id="theme-system" aria-label="System theme" onclick="setTheme('system')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+    </button>
+    <button id="theme-dark" aria-label="Dark theme" onclick="setTheme('dark')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </div>
+
+  <!-- Nav -->
+  <nav>
+    <a href="#" class="logo">Everything<span>Browser</span></a>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-inner">
+      <div class="tag">Open Source Desktop App</div>
+      <h1>One app for <span>all your files</span></h1>
+      <p>Connect to SFTP servers, Backblaze B2, Docker volumes, and your local filesystem — all from a single, blazing-fast desktop interface.</p>
+      <div class="hero-buttons">
+        <a href="https://github.com/SjoenH/EverythingBrowser/releases" class="btn btn-primary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download
+        </a>
+        <a href="https://github.com/SjoenH/EverythingBrowser" class="btn btn-secondary">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+          GitHub
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Connections -->
+  <section class="connections" id="connections">
+    <div class="container">
+      <div class="section-header">
+        <div class="label">Connections</div>
+        <h2>Connect to anything</h2>
+        <p>Seamlessly manage files across all your storage backends from one unified interface.</p>
+      </div>
+      <div class="conn-grid">
+        <div class="conn-card">
+          <div class="conn-icon">
+            <svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="7" cy="6" r="1"/><circle cx="7" cy="18" r="1"/></svg>
+          </div>
+          <h3>SFTP</h3>
+          <p>Securely connect to remote servers via SSH. Supports password, key-based, and agent authentication.</p>
+        </div>
+        <div class="conn-card">
+          <div class="conn-icon">
+            <svg viewBox="0 0 24 24"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><polyline points="12 12 12 21"/><polyline points="8 17 12 21 16 17"/></svg>
+          </div>
+          <h3>Backblaze B2</h3>
+          <p>Browse and manage your B2 cloud storage buckets using the S3-compatible API.</p>
+        </div>
+        <div class="conn-card">
+          <div class="conn-icon">
+            <svg viewBox="0 0 24 24"><path d="M22 12H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+          </div>
+          <h3>Docker Volumes</h3>
+          <p>Browse and manage files inside Docker volumes directly without spinning up containers manually.</p>
+        </div>
+        <div class="conn-card">
+          <div class="conn-icon">
+            <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M15 2v2M9 2v2M15 20v2M9 20v2M2 15h2M2 9h2M20 15h2M20 9h2"/></svg>
+          </div>
+          <h3>Docker Exec</h3>
+          <p>Access the filesystem of running Docker containers. Navigate, upload, and download files live.</p>
+        </div>
+        <div class="conn-card">
+          <div class="conn-icon">
+            <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          </div>
+          <h3>Local Filesystem</h3>
+          <p>Quick access to folders on your machine. Useful as a source or target for transfers.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features">
+    <div class="container">
+      <div class="section-header">
+        <div class="label">Features</div>
+        <h2>Built for power users</h2>
+        <p>A modern file manager with the flexibility and keyboard shortcuts you expect.</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-item">
+          <div class="feature-dot"></div>
+          <div>
+            <h3>Dockable Multi-Pane Layout</h3>
+            <p>Split your workspace into panes — horizontally or vertically. Drag tabs between panes with VS Code-style docking indicators.</p>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-dot"></div>
+          <div>
+            <h3>Multi-Tab Interface</h3>
+            <p>Open multiple connections side by side. Each pane supports its own set of tabs with full drag-and-drop support.</p>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-dot"></div>
+          <div>
+            <h3>Detached Windows</h3>
+            <p>Pop tabs out into separate windows. Tabs reattach automatically when the window is closed.</p>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-dot"></div>
+          <div>
+            <h3>Keyboard Shortcuts</h3>
+            <p>Navigate, split panes, switch tabs, and manage connections — all from the keyboard. Ctrl+B toggles the sidebar, Ctrl+W closes tabs.</p>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-dot"></div>
+          <div>
+            <h3>Drag & Drop Transfers</h3>
+            <p>Upload files by dropping them into the browser. Transfer files between connections with progress tracking.</p>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-dot"></div>
+          <div>
+            <h3>Secure Credentials</h3>
+            <p>Passwords and keys are stored in your OS keyring — never in plain text config files.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tech -->
+  <section class="connections" id="tech">
+    <div class="container">
+      <div class="section-header">
+        <div class="label">Under the Hood</div>
+        <h2>Built with Rust & React</h2>
+        <p>Native performance with a modern, responsive UI.</p>
+      </div>
+      <div class="conn-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));">
+        <div class="conn-card" style="text-align:center;">
+          <h3>Tauri v2</h3>
+          <p>Lightweight native shell. No Electron bloat.</p>
+        </div>
+        <div class="conn-card" style="text-align:center;">
+          <h3>Rust Backend</h3>
+          <p>Async I/O with Tokio. Memory-safe and fast.</p>
+        </div>
+        <div class="conn-card" style="text-align:center;">
+          <h3>React 19</h3>
+          <p>Modern hooks, Zustand state, Tailwind styling.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta">
+    <div class="container">
+      <h2>Ready to try it?</h2>
+      <p>EverythingBrowser is free and open source. Download it or build from source.</p>
+      <div class="hero-buttons">
+        <a href="https://github.com/SjoenH/EverythingBrowser/releases" class="btn btn-primary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download
+        </a>
+        <a href="https://github.com/SjoenH/EverythingBrowser" class="btn btn-secondary">
+          View Source
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <p>Built with Rust & React. Open source on <a href="https://github.com/SjoenH/EverythingBrowser">GitHub</a>.</p>
+  </footer>
+
+  <script>
+    function getSystemTheme() {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+
+    function applyTheme(theme) {
+      const resolved = theme === 'system' ? getSystemTheme() : theme;
+      document.documentElement.setAttribute('data-theme', resolved);
+      document.getElementById('theme-light').classList.toggle('active', theme === 'light');
+      document.getElementById('theme-system').classList.toggle('active', theme === 'system');
+      document.getElementById('theme-dark').classList.toggle('active', theme === 'dark');
+    }
+
+    function setTheme(theme) {
+      localStorage.setItem('eb-site-theme', theme);
+      applyTheme(theme);
+    }
+
+    // Init: default to system
+    const saved = localStorage.getItem('eb-site-theme') || 'system';
+    applyTheme(saved);
+
+    // Listen for system theme changes
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      const current = localStorage.getItem('eb-site-theme') || 'system';
+      if (current === 'system') applyTheme('system');
+    });
+  </script>
+
+</body>
+</html>

@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/static/tauri/capabilities-schema.json",
   "identifier": "default",
   "description": "EverythingBrowser default capabilities",
-  "windows": ["main", "detached-*"],
+  "windows": ["main", "detached-*", "settings"],
   "permissions": [
     "core:default",
     "core:window:default",

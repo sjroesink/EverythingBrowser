@@ -1,5 +1,5 @@
 import { useRef, useCallback, useState, useEffect } from "react";
-import { Server, Cloud, X } from "lucide-react";
+import { Server, Cloud, HardDrive, Terminal, X } from "lucide-react";
 import { useLayoutStore } from "@/stores/use-layout-store";
 import type { Tab } from "@/types/connection";
 
@@ -129,11 +129,10 @@ export function TabBar({
                   : "text-muted-foreground hover:text-foreground hover:bg-foreground/5"
               }`}
             >
-              {tab.config.type === "Sftp" ? (
-                <Server className="w-3.5 h-3.5 shrink-0" />
-              ) : (
-                <Cloud className="w-3.5 h-3.5 shrink-0" />
-              )}
+              {tab.config.type === "Sftp" && <Server className="w-3.5 h-3.5 shrink-0" />}
+              {tab.config.type === "BackblazeB2" && <Cloud className="w-3.5 h-3.5 shrink-0" />}
+              {tab.config.type === "DockerVolume" && <HardDrive className="w-3.5 h-3.5 shrink-0" />}
+              {tab.config.type === "DockerExec" && <Terminal className="w-3.5 h-3.5 shrink-0" />}
               <span className="truncate max-w-[140px]">{tab.config.name}</span>
               <button
                 onClick={(e) => {

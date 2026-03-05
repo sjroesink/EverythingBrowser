@@ -148,3 +148,27 @@ export async function ensureDragIcon(): Promise<string> {
 export async function getClipboardFiles(): Promise<string[]> {
   return invoke<string[]>("get_clipboard_files");
 }
+
+export async function openInEditor(
+  editorPath: string,
+  filePath: string
+): Promise<void> {
+  return invoke("open_in_editor", { editorPath, filePath });
+}
+
+export async function getAppDataDir(): Promise<string> {
+  return invoke<string>("get_app_data_dir");
+}
+
+export async function openPathInExplorer(path: string): Promise<void> {
+  return invoke("open_path_in_explorer", { path });
+}
+
+export interface DetectedEditor {
+  name: string;
+  path: string;
+}
+
+export async function detectEditors(): Promise<DetectedEditor[]> {
+  return invoke<DetectedEditor[]>("detect_editors");
+}

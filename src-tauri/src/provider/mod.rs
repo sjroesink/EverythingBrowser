@@ -1,4 +1,8 @@
 pub mod b2;
+pub mod docker_common;
+pub mod docker_exec;
+pub mod docker_volume;
+pub mod local_fs;
 pub mod registry;
 pub mod sftp;
 

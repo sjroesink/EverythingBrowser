@@ -1,14 +1,15 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen, emit } from "@tauri-apps/api/event";
+import { listen, emitTo } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { exit } from "@tauri-apps/plugin-process";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useLayoutStore } from "@/stores/use-layout-store";
+import { useTabsStore } from "@/stores/use-tabs-store";
 import { Titlebar } from "@/components/layout/titlebar";
 import { StatusBar } from "@/components/layout/status-bar";
-import { FileBrowserTab } from "@/components/browser/file-browser-tab";
-import { TabBar } from "@/components/browser/tab-bar";
+import { LayoutRenderer } from "@/components/layout/layout-renderer";
+import { DockingOverlay } from "@/components/layout/docking-overlay";
 import { TransferPanel } from "@/components/transfers/transfer-panel";
 import {
   FileBrowserProvider,
@@ -36,73 +37,97 @@ interface TabTransferPayload {
 }
 
 export default function DetachedWindow() {
-  useTheme(); // Apply theme
+  useTheme();
 
   const {
+    savedConnections,
     activeConnectionIds,
     connect,
+    disconnect,
   } = useConnections();
 
   const transfers = useTransferQueue();
 
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const tabs = useTabsStore((s) => s.tabs);
+  const insertTab = useTabsStore((s) => s.insertTab);
+  const closeTabInStore = useTabsStore((s) => s.closeTab);
+
+  const root = useLayoutStore((s) => s.root);
+  const tabDrag = useLayoutStore((s) => s.tabDrag);
+  const connectionDrag = useLayoutStore((s) => s.connectionDrag);
+  const addTabToPane = useLayoutStore((s) => s.addTabToPane);
+  const getFirstPaneId = useLayoutStore((s) => s.getFirstPaneId);
+  const removeTabFromAllPanes = useLayoutStore((s) => s.removeTabFromAllPanes);
+
   const [showTransfers, setShowTransfers] = useState(false);
   const [clipboardSelection, setClipboardSelection] =
     useState<ClipboardSelection | null>(null);
   const [isCliLaunched, setIsCliLaunched] = useState(false);
+  const [hasReceivedTab, setHasReceivedTab] = useState(false);
+
+  const isCliLaunchedRef = useRef(isCliLaunched);
+  isCliLaunchedRef.current = isCliLaunched;
 
   // Check for CLI-launched connection on mount
   useEffect(() => {
-    invoke<CliLaunchData | null>("get_cli_connection").then((data) => {
-      if (!data) return;
-      setIsCliLaunched(true);
+    invoke<CliLaunchData | null>("get_cli_connection")
+      .then((data) => {
+        if (!data) return;
+        setIsCliLaunched(true);
+        setHasReceivedTab(true);
 
-      const defaultPath =
-        data.config.type === "Sftp" ? data.config.defaultPath ?? "/" : "/";
-      const tab: Tab = {
-        id: crypto.randomUUID(),
-        connectionId: data.config.id,
-        config: data.config,
-        currentPath: defaultPath,
-      };
-      setTabs([tab]);
-      setActiveTabId(tab.id);
+        const defaultPath =
+          "defaultPath" in data.config && data.config.defaultPath ? data.config.defaultPath : "/";
+        const tab: Tab = {
+          id: crypto.randomUUID(),
+          connectionId: data.config.id,
+          config: data.config,
+          currentPath: defaultPath,
+        };
+        insertTab(tab);
+        addTabToPane(getFirstPaneId(), tab.id);
 
-      void connect(data.config, data.secret ?? undefined).catch(() => {});
-    }).catch(() => {});
-  }, [connect]);
+        void connect(data.config, data.secret ?? undefined).catch(() => {});
+      })
+      .catch(() => {});
+  }, [connect, insertTab, addTabToPane, getFirstPaneId]);
 
   // Listen for tab transfer from main window
   useEffect(() => {
     const unlisten = listen<TabTransferPayload>("tab-transfer", (event) => {
       const { tab } = event.payload;
-      setTabs((prev) => [...prev, tab]);
-      setActiveTabId(tab.id);
+      insertTab(tab);
+      addTabToPane(getFirstPaneId(), tab.id);
+      setHasReceivedTab(true);
 
-      // Ensure connection is active (ConnectionManager is shared)
       void connect(tab.config).catch(() => {});
     });
 
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [connect]);
+  }, [connect, insertTab, addTabToPane, getFirstPaneId]);
 
-  // Keep a ref to tabs for the close handler (avoids stale closure)
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
+  // Auto-close when all tabs are gone (after initial tab received)
+  useEffect(() => {
+    if (!hasReceivedTab || tabs.length > 0) return;
 
-  // On window close: if CLI-launched, exit the app entirely.
-  // Otherwise, send tabs back to main window.
-  const isCliLaunchedRef = useRef(isCliLaunched);
-  isCliLaunchedRef.current = isCliLaunched;
+    if (isCliLaunchedRef.current) {
+      setTimeout(() => {
+        void exit(0);
+      }, 100);
+    } else {
+      setTimeout(() => {
+        getCurrentWindow().destroy().catch(() => {});
+      }, 100);
+    }
+  }, [hasReceivedTab, tabs.length]);
 
+  // On window close: send all remaining tabs back to main window
   useEffect(() => {
     const appWindow = getCurrentWindow();
     const unlisten = appWindow.onCloseRequested(async () => {
       if (isCliLaunchedRef.current) {
-        // CLI mode: exit the entire app
         try {
           await exit(0);
         } catch {
@@ -112,9 +137,9 @@ export default function DetachedWindow() {
       }
 
       try {
-        const currentTabs = tabsRef.current;
+        const currentTabs = useTabsStore.getState().tabs;
         if (currentTabs.length > 0) {
-          await emit("tab-reattach", { tabs: currentTabs });
+          await emitTo("main", "tab-reattach", { tabs: currentTabs });
         }
       } catch {
         // Don't block the close if emit fails
@@ -126,102 +151,38 @@ export default function DetachedWindow() {
     };
   }, []);
 
-  // Handle tab drag-out: when a tab is dragged outside this detached window,
-  // send it back to the main window
-  const tabDrag = useLayoutStore((s) => s.tabDrag);
-  const endTabDrag = useLayoutStore((s) => s.endTabDrag);
-  const activeTabIdRef = useRef(activeTabId);
-  activeTabIdRef.current = activeTabId;
+  // Handle detach: send tab back to main window
+  const handleDetachTab = useCallback(
+    (tabId: string, sourcePaneId: string, _screenX: number, _screenY: number) => {
+      const tab = useTabsStore.getState().getTab(tabId);
+      if (!tab) return;
 
-  useEffect(() => {
-    if (!tabDrag) return;
+      removeTabFromAllPanes(tabId);
+      closeTabInStore(tabId);
 
-    const handleMouseMove = (_e: MouseEvent) => {
-      // Could show ghost cursor feedback here
-    };
-
-    const handleMouseUp = (e: MouseEvent) => {
-      const { tabId } = tabDrag;
-      const tab = tabsRef.current.find((t) => t.id === tabId);
-
-      // Check if mouse is outside the window
-      const isOutside =
-        e.clientX < 0 ||
-        e.clientY < 0 ||
-        e.clientX > window.innerWidth ||
-        e.clientY > window.innerHeight;
-
-      if (isOutside && tab) {
-        if (!isCliLaunchedRef.current) {
-          // Send tab back to main window
-          void emit("tab-reattach", { tabs: [tab] }).catch(() => {});
-        }
-
-        // Remove from this window
-        setTabs((prev) => prev.filter((t) => t.id !== tabId));
-
-        // Update active tab if needed
-        if (activeTabIdRef.current === tabId) {
-          const remaining = tabsRef.current.filter((t) => t.id !== tabId);
-          setActiveTabId(remaining[0]?.id ?? null);
-        }
-
-        // Close window if no tabs left
-        const remaining = tabsRef.current.filter((t) => t.id !== tabId);
-        if (remaining.length === 0) {
-          if (isCliLaunchedRef.current) {
-            setTimeout(() => { void exit(0); }, 100);
-          } else {
-            setTimeout(() => getCurrentWindow().destroy().catch(() => {}), 100);
-          }
-        }
+      if (!isCliLaunchedRef.current) {
+        void emitTo("main", "tab-reattach", { tabs: [tab] }).catch(() => {});
       }
+    },
+    [removeTabFromAllPanes, closeTabInStore]
+  );
 
-      endTabDrag();
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [tabDrag, endTabDrag]);
-
-  const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
-
-  const handleCloseTab = useCallback(
+  const closeTab = useCallback(
     (tabId: string) => {
-      const currentTabs = tabsRef.current;
-      const next = currentTabs.filter((t) => t.id !== tabId);
-
-      setTabs(next);
-
-      if (activeTabIdRef.current === tabId) {
-        setActiveTabId(next[0]?.id ?? null);
-      }
-
-      // If no tabs left, close the window
-      if (next.length === 0) {
-        if (isCliLaunchedRef.current) {
-          setTimeout(() => { void exit(0); }, 100);
-        } else {
-          // Use destroy to bypass onCloseRequested since there are no tabs to reattach
-          setTimeout(() => {
-            getCurrentWindow().destroy().catch(() => {});
-          }, 100);
+      const tab = useTabsStore.getState().getTab(tabId);
+      removeTabFromAllPanes(tabId);
+      closeTabInStore(tabId);
+      if (tab) {
+        const remaining = useTabsStore.getState().tabs.filter(
+          (t) => t.connectionId === tab.connectionId
+        );
+        if (remaining.length === 0) {
+          void disconnect(tab.connectionId);
         }
       }
     },
-    []
+    [removeTabFromAllPanes, closeTabInStore, disconnect]
   );
-
-  const setTabPath = useCallback((tabId: string, path: string) => {
-    setTabs((prev) =>
-      prev.map((t) => (t.id === tabId ? { ...t, currentPath: path } : t))
-    );
-  }, []);
 
   const handleDownload = useCallback(
     async (connectionId: string, entry: FileEntry) => {
@@ -342,45 +303,56 @@ export default function DetachedWindow() {
 
   const handleDuplicateTab = useCallback(
     async (tabId: string) => {
-      const tab = tabs.find((t) => t.id === tabId);
+      const tab = useTabsStore.getState().getTab(tabId);
       if (!tab) return;
       try {
         const connectionId = await connect(tab.config);
         const defaultPath =
-          tab.config.type === "Sftp" ? tab.config.defaultPath ?? "/" : "/";
+          "defaultPath" in tab.config && tab.config.defaultPath ? tab.config.defaultPath : "/";
         const newTab: Tab = {
           id: crypto.randomUUID(),
           connectionId,
           config: tab.config,
           currentPath: defaultPath,
         };
-        setTabs((prev) => [...prev, newTab]);
-        setActiveTabId(newTab.id);
+        insertTab(newTab);
+        const paneId = useLayoutStore.getState().findPaneForTab(tabId);
+        if (paneId) {
+          addTabToPane(paneId, newTab.id);
+        } else {
+          addTabToPane(getFirstPaneId(), newTab.id);
+        }
       } catch {
         // handled in hook
       }
     },
-    [tabs, connect]
+    [connect, insertTab, addTabToPane, getFirstPaneId]
   );
 
-  const handleCloseOtherTabs = useCallback(
-    (tabId: string) => {
-      const toClose = tabs.filter((t) => t.id !== tabId);
-      for (const tab of toClose) {
-        handleCloseTab(tab.id);
-      }
-    },
-    [tabs, handleCloseTab]
-  );
-
-  const handleCloseConnectionTabs = useCallback(
+  const handleCloseAllTabsForConnection = useCallback(
     (connectionId: string) => {
-      const toClose = tabs.filter((t) => t.connectionId === connectionId);
-      for (const tab of toClose) {
-        handleCloseTab(tab.id);
+      const connectionTabs = useTabsStore
+        .getState()
+        .tabs.filter((t) => t.connectionId === connectionId);
+      for (const tab of connectionTabs) {
+        removeTabFromAllPanes(tab.id);
+        closeTabInStore(tab.id);
+      }
+      void disconnect(connectionId);
+    },
+    [removeTabFromAllPanes, closeTabInStore, disconnect]
+  );
+
+  const handleDisconnectIfUnused = useCallback(
+    (connectionId: string) => {
+      const remaining = useTabsStore
+        .getState()
+        .tabs.filter((t) => t.connectionId === connectionId);
+      if (remaining.length === 0) {
+        void disconnect(connectionId);
       }
     },
-    [tabs, handleCloseTab]
+    [disconnect]
   );
 
   const fileBrowserCallbacks = useMemo<FileBrowserCallbacks>(
@@ -394,8 +366,8 @@ export default function DetachedWindow() {
       canPaste: Boolean(clipboardSelection),
       activeConnectionIds,
       onDuplicateTab: handleDuplicateTab,
-      onCloseAllTabsForConnection: handleCloseConnectionTabs,
-      onDisconnectIfUnused: () => {}, // DetachedWindow manages connections differently
+      onCloseAllTabsForConnection: handleCloseAllTabsForConnection,
+      onDisconnectIfUnused: handleDisconnectIfUnused,
     }),
     [
       handleDownload,
@@ -406,7 +378,8 @@ export default function DetachedWindow() {
       clipboardSelection,
       activeConnectionIds,
       handleDuplicateTab,
-      handleCloseConnectionTabs,
+      handleCloseAllTabsForConnection,
+      handleDisconnectIfUnused,
     ]
   );
 
@@ -415,39 +388,18 @@ export default function DetachedWindow() {
       <Titlebar />
 
       <div className="flex-1 flex flex-col min-h-0">
-        <FileBrowserProvider value={fileBrowserCallbacks}>
-          <TabBar
-            tabs={tabs}
-            activeTabId={activeTabId}
-            paneId="detached"
-            onSelectTab={setActiveTabId}
-            onCloseTab={handleCloseTab}
-            onDuplicateTab={handleDuplicateTab}
-            onCloseOtherTabs={handleCloseOtherTabs}
-            onCloseConnectionTabs={handleCloseConnectionTabs}
-          />
+        <div className="flex-1 min-h-0 relative" data-layout-area>
+          <FileBrowserProvider value={fileBrowserCallbacks}>
+            <LayoutRenderer
+              node={root}
+              savedConnections={savedConnections}
+            />
+          </FileBrowserProvider>
 
-          <div className="flex-1 relative min-h-0">
-            {tabs.map((tab) => (
-              <FileBrowserTab
-                key={tab.id}
-                tabId={tab.id}
-                connectionId={tab.connectionId}
-                config={tab.config}
-                isVisible={tab.id === activeTabId}
-                isConnected={activeConnectionIds.has(tab.connectionId)}
-                initialPath={tab.currentPath}
-                onPathChange={setTabPath}
-                onDownload={handleDownload}
-                onUpload={handleUpload}
-                onDropUpload={handleDropUpload}
-                onCopyEntries={handleCopyEntries}
-                onPaste={handlePaste}
-                canPaste={Boolean(clipboardSelection)}
-              />
-            ))}
-          </div>
-        </FileBrowserProvider>
+          {(tabDrag || connectionDrag) && (
+            <DockingOverlay onDetachTab={handleDetachTab} />
+          )}
+        </div>
 
         <TransferPanel
           isOpen={showTransfers}
@@ -458,8 +410,8 @@ export default function DetachedWindow() {
       </div>
 
       <StatusBar
-        activeConfig={activeTab?.config ?? null}
         transferCount={transfers.activeCount}
+        isTransfersOpen={showTransfers}
         onToggleTransfers={() => setShowTransfers(!showTransfers)}
       />
     </div>

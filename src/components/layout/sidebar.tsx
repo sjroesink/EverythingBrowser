@@ -1,19 +1,16 @@
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useEffect, useState } from "react";
 import { ConnectionList } from "@/components/sidebar/connection-list";
-import { SidebarFooter } from "@/components/sidebar/sidebar-footer";
 import { useLayoutStore } from "@/stores/use-layout-store";
-import type { ConnectionConfig, SavedConnection } from "@/types/connection";
-import type { Theme } from "@/hooks/use-theme";
-import { PanelLeftClose, PanelLeftOpen, Server, Cloud, Plus, Download } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import type { ConnectionConfig, LocalFsConfig, SavedConnection } from "@/types/connection";
+import { PanelLeftClose, PanelLeftOpen, Server, Cloud, HardDrive, Terminal, FolderOpen, Plus, Download, Settings } from "lucide-react";
 
 const DRAG_THRESHOLD = 5;
 
 interface SidebarProps {
   savedConnections: SavedConnection[];
   tabCountByConnection: Map<string, number>;
-  theme: Theme;
   collapsed: boolean;
-  onSetTheme: (theme: Theme) => void;
   onConnect: (config: ConnectionConfig, secret?: string) => void;
   onCloseAllTabs: (connectionId: string) => void;
   onFocusConnection: (connectionId: string) => void;
@@ -22,14 +19,14 @@ interface SidebarProps {
   onRemoveConnection: (id: string) => void;
   onImport: () => void;
   onToggleCollapse: () => void;
+  onAddLocalFolder: (config: LocalFsConfig) => void;
+  onOpenSettings: () => void;
 }
 
 export function Sidebar({
   savedConnections,
   tabCountByConnection,
-  theme,
   collapsed,
-  onSetTheme,
   onConnect,
   onCloseAllTabs,
   onFocusConnection,
@@ -38,9 +35,76 @@ export function Sidebar({
   onRemoveConnection,
   onImport,
   onToggleCollapse,
+  onAddLocalFolder,
+  onOpenSettings,
 }: SidebarProps) {
   const startConnectionDrag = useLayoutStore((s) => s.startConnectionDrag);
   const dragStartRef = useRef<{ x: number; y: number; config: ConnectionConfig } | null>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const [isFolderDragOver, setIsFolderDragOver] = useState(false);
+
+  // Listen for folder drops from Windows Explorer onto the sidebar
+  useEffect(() => {
+    const unlisteners: (() => void)[] = [];
+
+    listen<{ paths: string[]; position: { x: number; y: number } }>(
+      "tauri://drag-enter",
+      (event) => {
+        if (!sidebarRef.current) return;
+        const rect = sidebarRef.current.getBoundingClientRect();
+        const { x, y } = event.payload.position;
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+          setIsFolderDragOver(true);
+        }
+      }
+    ).then((u) => unlisteners.push(u));
+
+    listen<{ paths: string[]; position: { x: number; y: number } }>(
+      "tauri://drag-over",
+      (event) => {
+        if (!sidebarRef.current) return;
+        const rect = sidebarRef.current.getBoundingClientRect();
+        const { x, y } = event.payload.position;
+        setIsFolderDragOver(
+          x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+        );
+      }
+    ).then((u) => unlisteners.push(u));
+
+    listen("tauri://drag-leave", () => {
+      setIsFolderDragOver(false);
+    }).then((u) => unlisteners.push(u));
+
+    listen<{ paths: string[]; position: { x: number; y: number } }>(
+      "tauri://drag-drop",
+      (event) => {
+        setIsFolderDragOver(false);
+
+        if (!sidebarRef.current) return;
+        const rect = sidebarRef.current.getBoundingClientRect();
+        const { x, y } = event.payload.position;
+        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+          return;
+        }
+
+        // Add each dropped folder as a LocalFs connection
+        for (const folderPath of event.payload.paths) {
+          const folderName = folderPath.split(/[\\/]/).pop() || "Local Folder";
+          const config: LocalFsConfig = {
+            type: "LocalFs",
+            id: crypto.randomUUID(),
+            name: folderName,
+            path: folderPath,
+          };
+          onAddLocalFolder(config);
+        }
+      }
+    ).then((u) => unlisteners.push(u));
+
+    return () => {
+      unlisteners.forEach((u) => u());
+    };
+  }, [onAddLocalFolder]);
 
   const handleConnectionMouseDown = useCallback(
     (e: React.MouseEvent, config: ConnectionConfig) => {
@@ -75,7 +139,7 @@ export function Sidebar({
 
   if (collapsed) {
     return (
-      <div className="flex flex-col h-full w-10 bg-sidebar border-r border-sidebar-border shrink-0">
+      <div ref={sidebarRef} className={`flex flex-col h-full w-10 bg-sidebar border-r border-sidebar-border shrink-0 transition-colors ${isFolderDragOver ? "bg-primary/10 ring-2 ring-inset ring-primary/40" : ""}`}>
         <div className="flex items-center justify-center py-2 border-b border-sidebar-border">
           <button
             onClick={onToggleCollapse}
@@ -102,11 +166,11 @@ export function Sidebar({
                 }`}
                 title={conn.config.name}
               >
-                {conn.config.type === "Sftp" ? (
-                  <Server className="w-3.5 h-3.5" />
-                ) : (
-                  <Cloud className="w-3.5 h-3.5" />
-                )}
+                {conn.config.type === "Sftp" && <Server className="w-3.5 h-3.5" />}
+                {conn.config.type === "BackblazeB2" && <Cloud className="w-3.5 h-3.5" />}
+                {conn.config.type === "DockerVolume" && <HardDrive className="w-3.5 h-3.5" />}
+                {conn.config.type === "DockerExec" && <Terminal className="w-3.5 h-3.5" />}
+                {conn.config.type === "LocalFs" && <FolderOpen className="w-3.5 h-3.5" />}
                 {hasOpenTabs && count <= 1 && (
                   <span className="absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 bg-success rounded-full" />
                 )}
@@ -135,13 +199,20 @@ export function Sidebar({
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
+          <button
+            onClick={onOpenSettings}
+            className="inline-flex items-center justify-center w-7 h-7 rounded-md hover:bg-foreground/10 text-muted-foreground hover:text-foreground transition-colors"
+            title="Settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full w-60 bg-sidebar border-r border-sidebar-border shrink-0">
+    <div ref={sidebarRef} className={`flex flex-col h-full w-60 bg-sidebar border-r border-sidebar-border shrink-0 transition-colors ${isFolderDragOver ? "bg-primary/10 ring-2 ring-inset ring-primary/40" : ""}`}>
       <div className="flex items-center justify-between px-3 py-2 border-b border-sidebar-border">
         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
           Connections
@@ -183,7 +254,15 @@ export function Sidebar({
         />
       </div>
 
-      <SidebarFooter theme={theme} onSetTheme={onSetTheme} />
+      <div className="px-3 py-2 border-t border-sidebar-border">
+        <button
+          onClick={onOpenSettings}
+          className="flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-colors"
+        >
+          <Settings className="w-3.5 h-3.5" />
+          Settings
+        </button>
+      </div>
     </div>
   );
 }

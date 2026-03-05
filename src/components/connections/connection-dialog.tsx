@@ -2,6 +2,9 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { SftpForm } from "./sftp-form";
 import { B2Form } from "./b2-form";
+import { DockerVolumeForm } from "./docker-volume-form";
+import { DockerExecForm } from "./docker-exec-form";
+import { LocalFsForm } from "./local-fs-form";
 import type { ConnectionConfig, ProviderType } from "@/types/connection";
 
 interface ConnectionDialogProps {
@@ -11,6 +14,14 @@ interface ConnectionDialogProps {
   onSave: (config: ConnectionConfig, secret?: string) => void;
 }
 
+const PROVIDER_OPTIONS: { value: ProviderType; label: string }[] = [
+  { value: "LocalFs", label: "Local Folder" },
+  { value: "Sftp", label: "SFTP" },
+  { value: "BackblazeB2", label: "Backblaze B2" },
+  { value: "DockerVolume", label: "Docker Volume" },
+  { value: "DockerExec", label: "Docker Exec" },
+];
+
 export function ConnectionDialog({
   isOpen,
   editConfig,
@@ -18,10 +29,55 @@ export function ConnectionDialog({
   onSave,
 }: ConnectionDialogProps) {
   const [providerType, setProviderType] = useState<ProviderType>(
-    editConfig?.type ?? "Sftp"
+    editConfig?.type ?? "LocalFs"
   );
 
   if (!isOpen) return null;
+
+  const renderForm = () => {
+    switch (providerType) {
+      case "LocalFs":
+        return (
+          <LocalFsForm
+            editConfig={editConfig?.type === "LocalFs" ? editConfig : null}
+            onSave={onSave}
+            onCancel={onClose}
+          />
+        );
+      case "Sftp":
+        return (
+          <SftpForm
+            editConfig={editConfig?.type === "Sftp" ? editConfig : null}
+            onSave={onSave}
+            onCancel={onClose}
+          />
+        );
+      case "BackblazeB2":
+        return (
+          <B2Form
+            editConfig={editConfig?.type === "BackblazeB2" ? editConfig : null}
+            onSave={onSave}
+            onCancel={onClose}
+          />
+        );
+      case "DockerVolume":
+        return (
+          <DockerVolumeForm
+            editConfig={editConfig?.type === "DockerVolume" ? editConfig : null}
+            onSave={onSave}
+            onCancel={onClose}
+          />
+        );
+      case "DockerExec":
+        return (
+          <DockerExecForm
+            editConfig={editConfig?.type === "DockerExec" ? editConfig : null}
+            onSave={onSave}
+            onCancel={onClose}
+          />
+        );
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -47,48 +103,25 @@ export function ConnectionDialog({
             <label className="block text-xs font-medium text-muted-foreground mb-1.5">
               Protocol
             </label>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setProviderType("Sftp")}
-                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                  providerType === "Sftp"
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border hover:bg-accent"
-                }`}
-              >
-                SFTP
-              </button>
-              <button
-                onClick={() => setProviderType("BackblazeB2")}
-                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                  providerType === "BackblazeB2"
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border hover:bg-accent"
-                }`}
-              >
-                Backblaze B2
-              </button>
+            <div className="grid grid-cols-2 gap-2">
+              {PROVIDER_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setProviderType(opt.value)}
+                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                    providerType === opt.value
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border hover:bg-accent"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
           </div>
         )}
 
-        <div className="px-5 py-4">
-          {providerType === "Sftp" ? (
-            <SftpForm
-              editConfig={editConfig?.type === "Sftp" ? editConfig : null}
-              onSave={onSave}
-              onCancel={onClose}
-            />
-          ) : (
-            <B2Form
-              editConfig={
-                editConfig?.type === "BackblazeB2" ? editConfig : null
-              }
-              onSave={onSave}
-              onCancel={onClose}
-            />
-          )}
-        </div>
+        <div className="px-5 py-4">{renderForm()}</div>
       </div>
     </div>
   );

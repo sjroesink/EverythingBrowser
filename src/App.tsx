@@ -9,6 +9,7 @@ import { DockingOverlay, type ConnectionDropTarget, type TabDropTarget } from "@
 import { FileDragOverlay } from "@/components/layout/file-drag-overlay";
 import { TransferPanel } from "@/components/transfers/transfer-panel";
 import { ConnectionDialog } from "@/components/connections/connection-dialog";
+import { WebviewWindow, getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import { ImportDialog } from "@/components/onboarding/import-dialog";
 import {
   FileBrowserProvider,
@@ -20,7 +21,7 @@ import { useTransferQueue } from "@/hooks/use-transfer-queue";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useTabsStore } from "@/stores/use-tabs-store";
 import { useLayoutStore, type LayoutNode, type PaneNode } from "@/stores/use-layout-store";
-import type { ConnectionConfig, Tab } from "@/types/connection";
+import type { ConnectionConfig, LocalFsConfig, Tab } from "@/types/connection";
 import type { FileEntry } from "@/types/filesystem";
 import { copyToSystemClipboard } from "@/services/file-service";
 
@@ -34,8 +35,25 @@ interface ClipboardSelection {
   entries: Pick<FileEntry, "path" | "name" | "isDir">[];
 }
 
+async function openSettingsWindow() {
+  const allWindows = await getAllWebviewWindows();
+  const existing = allWindows.find((w) => w.label === "settings");
+  if (existing) {
+    await existing.setFocus();
+    return;
+  }
+  new WebviewWindow("settings", {
+    url: "/",
+    title: "Settings",
+    width: 700,
+    height: 500,
+    decorations: false,
+    center: true,
+  });
+}
+
 export default function App() {
-  const { theme, setTheme } = useTheme();
+  useTheme();
   const {
     savedConnections,
     activeConnectionIds,
@@ -53,6 +71,7 @@ export default function App() {
 
   const tabs = useTabsStore((s) => s.tabs);
   const openTabInStore = useTabsStore((s) => s.openTab);
+  const insertTabInStore = useTabsStore((s) => s.insertTab);
   const closeTabInStore = useTabsStore((s) => s.closeTab);
 
   const root = useLayoutStore((s) => s.root);
@@ -231,18 +250,16 @@ export default function App() {
     const unlisten = listen<{ tabs: Tab[] }>("tab-reattach", (event) => {
       const { tabs: reattachedTabs } = event.payload;
       for (const tab of reattachedTabs) {
-        // Re-add to global tab store
-        const tabId = openTabInStore(tab.config, tab.connectionId);
-        // Add to first pane in layout
+        insertTabInStore(tab);
         const paneId = useLayoutStore.getState().getFirstPaneId();
-        useLayoutStore.getState().addTabToPane(paneId, tabId);
+        useLayoutStore.getState().addTabToPane(paneId, tab.id);
       }
     });
 
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [openTabInStore]);
+  }, [insertTabInStore]);
 
   const handleImportComplete = useCallback(
     async (configs: ConnectionConfig[]) => {
@@ -422,6 +439,19 @@ export default function App() {
       setEditingConfig(null);
     },
     [editingConfig, addConnection, updateConnection]
+  );
+
+  const handleAddLocalFolder = useCallback(
+    async (config: LocalFsConfig) => {
+      await addConnection(config);
+      try {
+        const connectionId = await connect(config);
+        openTab(config, connectionId);
+      } catch {
+        // Connection error handled in hook
+      }
+    },
+    [addConnection, connect, openTab]
   );
 
   const handleDownload = useCallback(
@@ -616,42 +646,16 @@ export default function App() {
     return counts;
   }, [tabs]);
 
-  // Find the active tab across all panes for the status bar
-  const activeConfig = useMemo(() => {
-    // Walk the tree to find first pane with an activeTabId
-    const findActiveTab = (
-      node: typeof root
-    ): ConnectionConfig | null => {
-      if (node.type === "pane") {
-        if (node.activeTabId) {
-          const tab = tabs.find((t) => t.id === node.activeTabId);
-          if (tab) {
-            const saved = savedConnections.find(
-              (c) => c.config.id === tab.connectionId
-            );
-            return saved?.config ?? tab.config;
-          }
-        }
-        return null;
-      }
-      return (
-        findActiveTab(node.children[0]) ?? findActiveTab(node.children[1])
-      );
-    };
-    return findActiveTab(root);
-  }, [root, tabs, savedConnections]);
 
   return (
     <div className="flex flex-col h-screen bg-background">
-      <Titlebar />
+      <Titlebar onOpenSettings={openSettingsWindow} />
 
       <div className="flex flex-1 min-h-0">
         <Sidebar
           savedConnections={savedConnections}
           tabCountByConnection={tabCountByConnection}
-          theme={theme}
           collapsed={sidebarCollapsed}
-          onSetTheme={setTheme}
           onConnect={handleConnect}
           onCloseAllTabs={handleCloseAllTabs}
           onFocusConnection={handleFocusConnection}
@@ -666,6 +670,8 @@ export default function App() {
           onRemoveConnection={removeConnection}
           onImport={() => setShowImportDialog(true)}
           onToggleCollapse={toggleSidebar}
+          onAddLocalFolder={handleAddLocalFolder}
+          onOpenSettings={openSettingsWindow}
         />
 
         <div className="flex-1 flex flex-col min-w-0">
@@ -694,9 +700,10 @@ export default function App() {
       </div>
 
       <StatusBar
-        activeConfig={activeConfig}
         transferCount={transfers.activeCount}
+        isTransfersOpen={showTransfers}
         onToggleTransfers={() => setShowTransfers(!showTransfers)}
+        onOpenSettings={openSettingsWindow}
       />
 
       <ConnectionDialog

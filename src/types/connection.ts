@@ -1,4 +1,4 @@
-export type ProviderType = "Sftp" | "BackblazeB2";
+export type ProviderType = "Sftp" | "BackblazeB2" | "DockerVolume" | "DockerExec" | "LocalFs";
 
 export interface SftpAuthPassword {
   method: "Password";
@@ -40,7 +40,30 @@ export interface B2Config {
   prefix?: string;
 }
 
-export type ConnectionConfig = SftpConfig | B2Config;
+export interface DockerVolumeConfig {
+  type: "DockerVolume";
+  id: string;
+  name: string;
+  volumeName: string;
+  image?: string;
+}
+
+export interface DockerExecConfig {
+  type: "DockerExec";
+  id: string;
+  name: string;
+  container: string;
+  defaultPath?: string;
+}
+
+export interface LocalFsConfig {
+  type: "LocalFs";
+  id: string;
+  name: string;
+  path: string;
+}
+
+export type ConnectionConfig = SftpConfig | B2Config | DockerVolumeConfig | DockerExecConfig | LocalFsConfig;
 
 export interface SavedConnection {
   config: ConnectionConfig;
@@ -56,4 +79,3 @@ export interface Tab {
   config: ConnectionConfig;
   currentPath: string;
 }
-

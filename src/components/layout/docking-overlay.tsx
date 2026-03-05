@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { emit } from "@tauri-apps/api/event";
+import { WebviewWindow, getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
+import { emitTo } from "@tauri-apps/api/event";
 import { useLayoutStore } from "@/stores/use-layout-store";
 import { useTabsStore } from "@/stores/use-tabs-store";
 import type { SplitDirection } from "@/stores/use-layout-store";
@@ -42,9 +42,10 @@ export type TabDropTarget =
 interface DockingOverlayProps {
   onConnectionDrop?: (configId: string, target: ConnectionDropTarget) => void;
   onDuplicateTabDrop?: (tabId: string, target: TabDropTarget) => void;
+  onDetachTab?: (tabId: string, sourcePaneId: string, screenX: number, screenY: number) => void;
 }
 
-export function DockingOverlay({ onConnectionDrop, onDuplicateTabDrop }: DockingOverlayProps) {
+export function DockingOverlay({ onConnectionDrop, onDuplicateTabDrop, onDetachTab }: DockingOverlayProps) {
   const tabDrag = useLayoutStore((s) => s.tabDrag);
   const connectionDrag = useLayoutStore((s) => s.connectionDrag);
   const moveTabToPane = useLayoutStore((s) => s.moveTabToPane);
@@ -202,9 +203,14 @@ export function DockingOverlay({ onConnectionDrop, onDuplicateTabDrop }: Docking
 
       const pane = findPaneAtPoint(e.clientX, e.clientY);
       const currentPaneId = pane?.paneId ?? null;
-      setHoveredPaneId(currentPaneId);
 
-      const hit = hitTest(e.clientX, e.clientY, currentPaneId);
+      // When moving a tab (not duplicating), skip the source pane for indicators
+      const isSourcePane = tabDrag && currentPaneId === tabDrag.sourcePaneId && !e.ctrlKey;
+      const effectivePaneId = isSourcePane ? null : currentPaneId;
+
+      setHoveredPaneId(effectivePaneId);
+
+      const hit = hitTest(e.clientX, e.clientY, effectivePaneId);
       setHovered(hit);
     };
 
@@ -218,7 +224,11 @@ export function DockingOverlay({ onConnectionDrop, onDuplicateTabDrop }: Docking
     const handleMouseUp = (e: MouseEvent) => {
       const pane = findPaneAtPoint(e.clientX, e.clientY);
       const currentPaneId = pane?.paneId ?? null;
-      const hit = hitTest(e.clientX, e.clientY, currentPaneId);
+
+      // When moving a tab (not duplicating), skip the source pane
+      const isSourcePane = tabDrag && currentPaneId === tabDrag.sourcePaneId && !e.ctrlKey;
+      const effectivePaneId = isSourcePane ? null : currentPaneId;
+      const hit = hitTest(e.clientX, e.clientY, effectivePaneId);
 
       if (tabDrag) {
         handleTabDrop(tabDrag, hit, e);
@@ -290,10 +300,14 @@ export function DockingOverlay({ onConnectionDrop, onDuplicateTabDrop }: Docking
           }
         }
       } else {
-        detachTab(tabId, sourcePaneId, e.screenX, e.screenY);
+        if (onDetachTab) {
+          onDetachTab(tabId, sourcePaneId, e.screenX, e.screenY);
+        } else {
+          detachTab(tabId, sourcePaneId, e.screenX, e.screenY);
+        }
       }
     },
-    [dockTabToSplit, dockTabToEdge, moveTabToPane, onDuplicateTabDrop]
+    [dockTabToSplit, dockTabToEdge, moveTabToPane, onDuplicateTabDrop, onDetachTab]
   );
 
   const handleConnectionDrop = useCallback(
@@ -331,23 +345,45 @@ export function DockingOverlay({ onConnectionDrop, onDuplicateTabDrop }: Docking
       removeTabFromPane(sourcePaneId, tabId);
       useTabsStore.getState().closeTab(tabId);
 
-      const windowLabel = `detached-${tabId.slice(0, 8)}`;
+      // Check if mouse is over an existing detached window
+      void (async () => {
+        const allWindows = await getAllWebviewWindows();
+        for (const win of allWindows) {
+          if (!win.label.startsWith("detached-")) continue;
+          try {
+            const pos = await win.outerPosition();
+            const size = await win.outerSize();
+            if (
+              screenX >= pos.x && screenX <= pos.x + size.width &&
+              screenY >= pos.y && screenY <= pos.y + size.height
+            ) {
+              // Mouse is over this detached window — send tab there
+              await emitTo(win.label, "tab-transfer", { tab });
+              return;
+            }
+          } catch {
+            // Window may have been closed
+          }
+        }
 
-      const detachedWindow = new WebviewWindow(windowLabel, {
-        url: "/",
-        title: tab.config.name,
-        width: 900,
-        height: 700,
-        decorations: false,
-        x: screenX - 450,
-        y: screenY - 50,
-      });
+        // No existing detached window at cursor — create a new one
+        const windowLabel = `detached-${tabId.slice(0, 8)}`;
+        const detachedWindow = new WebviewWindow(windowLabel, {
+          url: "/",
+          title: tab.config.name,
+          width: 900,
+          height: 700,
+          decorations: false,
+          x: screenX - 450,
+          y: screenY - 50,
+        });
 
-      detachedWindow.once("tauri://created", () => {
-        setTimeout(() => {
-          void emit("tab-transfer", { tab });
-        }, 300);
-      });
+        detachedWindow.once("tauri://created", () => {
+          setTimeout(() => {
+            void emitTo(windowLabel, "tab-transfer", { tab });
+          }, 300);
+        });
+      })();
     },
     [removeTabFromPane]
   );

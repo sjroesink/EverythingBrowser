@@ -59,7 +59,7 @@ export function FileBrowserTab({
 
     const startPath =
       initialPath ||
-      (config.type === "Sftp" && config.defaultPath ? config.defaultPath : "/");
+      ("defaultPath" in config && config.defaultPath ? config.defaultPath : "/");
 
     initializedRef.current = true;
     void browser.navigateTo(startPath);
@@ -149,6 +149,7 @@ export function FileBrowserTab({
         onGoForward={browser.goForward}
         onSetViewMode={browser.setViewMode}
         onSelect={browser.toggleSelection}
+        onSelectRange={browser.selectRange}
         onSelectAll={browser.selectAll}
         onMoveCursor={browser.moveCursor}
         onExtendSelection={browser.extendSelection}

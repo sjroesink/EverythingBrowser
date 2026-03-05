@@ -18,8 +18,10 @@ import {
   downloadToTemp,
   ensureDragIcon,
   getClipboardFiles,
+  openInEditor,
 } from "@/services/file-service";
 import { useLayoutStore } from "@/stores/use-layout-store";
+import { useSettingsStore } from "@/stores/use-settings-store";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { isEditableTarget } from "@/lib/keyboard";
 import { Loader2, FolderOpen, Upload } from "lucide-react";
@@ -59,6 +61,7 @@ interface FileBrowserProps {
   onGoForward: () => void;
   onSetViewMode: (mode: ViewMode) => void;
   onSelect: (path: string, multi: boolean) => void;
+  onSelectRange: (targetIndex: number) => void;
   onSelectAll: () => void;
   onMoveCursor: (delta: number) => void;
   onExtendSelection: (delta: number) => void;
@@ -95,6 +98,7 @@ export function FileBrowser({
   onGoForward,
   onSetViewMode,
   onSelect,
+  onSelectRange,
   onSelectAll,
   onMoveCursor,
   onExtendSelection,
@@ -123,6 +127,7 @@ export function FileBrowser({
   const [capabilities, setCapabilities] = useState<ProviderCapabilities | null>(
     null
   );
+  const editorPath = useSettingsStore((s) => s.editorPath);
   const [isDragOver, setIsDragOver] = useState(false);
   const [draggedEntry, setDraggedEntry] = useState<FileEntry | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
@@ -141,6 +146,8 @@ export function FileBrowser({
   // Refs for callbacks and data (avoid stale closures in global mouse handlers)
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const onSelectRangeRef = useRef(onSelectRange);
+  onSelectRangeRef.current = onSelectRange;
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
   const selectedPathsRef = useRef(selectedPaths);
@@ -207,8 +214,12 @@ export function FileBrowser({
 
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
     e.preventDefault();
+    // If right-clicked entry is not in current selection, select only it
+    if (!selectedPaths.has(entry.path)) {
+      onSelect(entry.path, false);
+    }
     setContextMenu({ x: e.clientX, y: e.clientY, mode: "entry", entry });
-  }, []);
+  }, [selectedPaths, onSelect]);
 
   const handleFolderContextMenu = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement | null;
@@ -222,47 +233,49 @@ export function FileBrowser({
     [onDownload]
   );
 
-  const handleDelete = useCallback(
-    async (entry: FileEntry) => {
-      try {
-        if (entry.isDir) {
-          await deleteDir(connectionId, entry.path, true);
-        } else {
-          await deleteFile(connectionId, entry.path);
+  // Delete confirmation dialog state
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    entries: FileEntry[];
+  } | null>(null);
+
+  const executeDelete = useCallback(
+    async (toDelete: FileEntry[]) => {
+      for (const entry of toDelete) {
+        try {
+          if (entry.isDir) {
+            await deleteDir(connectionId, entry.path, true);
+          } else {
+            await deleteFile(connectionId, entry.path);
+          }
+        } catch (e) {
+          console.error("Delete failed:", e);
         }
-        onRefresh();
-      } catch (e) {
-        console.error("Delete failed:", e);
       }
+      onRefresh();
     },
     [connectionId, onRefresh]
   );
 
-  const handleDeleteSelected = useCallback(async () => {
+  const handleDelete = useCallback(
+    (entry: FileEntry) => {
+      setDeleteConfirm({ entries: [entry] });
+    },
+    []
+  );
+
+  const handleDeleteSelected = useCallback(() => {
     const selected = entries.filter(
       (e) => selectedPaths.has(e.path) && e.name !== ".."
     );
     if (selected.length === 0) {
-      // Fall back to focused entry
       const focused = entries[focusedIndex];
       if (focused && focused.name !== "..") {
-        await handleDelete(focused);
+        setDeleteConfirm({ entries: [focused] });
       }
       return;
     }
-    for (const entry of selected) {
-      try {
-        if (entry.isDir) {
-          await deleteDir(connectionId, entry.path, true);
-        } else {
-          await deleteFile(connectionId, entry.path);
-        }
-      } catch (e) {
-        console.error("Delete failed:", e);
-      }
-    }
-    onRefresh();
-  }, [entries, selectedPaths, focusedIndex, connectionId, onRefresh, handleDelete]);
+    setDeleteConfirm({ entries: selected });
+  }, [entries, selectedPaths, focusedIndex]);
 
   const handleRename = useCallback((entry: FileEntry) => {
     setRenamingPath(entry.path);
@@ -303,6 +316,19 @@ export function FileBrowser({
   const handleProperties = useCallback((entry: FileEntry) => {
     setPropertiesPath(entry.path);
   }, []);
+
+  const handleEditInEditor = useCallback(
+    async (entry: FileEntry) => {
+      if (!editorPath) return;
+      try {
+        const localPath = await downloadToTemp(connectionId, entry.path);
+        await openInEditor(editorPath, localPath);
+      } catch (e) {
+        console.error("Edit in editor failed:", e);
+      }
+    },
+    [connectionId, editorPath]
+  );
 
   const handleRenameSubmit = useCallback(
     async (oldPath: string) => {
@@ -405,8 +431,6 @@ export function FileBrowser({
   const handleMouseDownEntry = useCallback(
     (entry: FileEntry, e: React.MouseEvent) => {
       if (e.button !== 0) return;
-      // Don't start drag on ".." entry
-      if (entry.name === "..") return;
       // Prevent browser from starting text selection or native drag
       e.preventDefault();
       dragEntryRef.current = entry;
@@ -629,6 +653,8 @@ export function FileBrowser({
       // Check drag threshold
       if (!isDraggingRef.current) {
         if (dist < DRAG_THRESHOLD) return;
+        // Don't start drag on ".." entry
+        if (dragEntryRef.current.name === "..") return;
         isDraggingRef.current = true;
         setDraggedEntry(dragEntryRef.current);
         document.body.style.cursor = "grabbing";
@@ -762,8 +788,13 @@ export function FileBrowser({
           // Double-click → open
           handleOpenRef.current(entry);
           lastClickRef.current = null;
+        } else if (e.shiftKey) {
+          // Shift+Click → range select from anchor to clicked item
+          const idx = entriesRef.current.findIndex((en) => en.path === entry.path);
+          if (idx >= 0) onSelectRangeRef.current(idx);
+          lastClickRef.current = { path: entry.path, time: now };
         } else {
-          // Single click → select
+          // Single click (optionally Ctrl) → select/toggle
           onSelectRef.current(entry.path, e.ctrlKey || e.metaKey);
           lastClickRef.current = { path: entry.path, time: now };
         }
@@ -898,9 +929,11 @@ export function FileBrowser({
           y={contextMenu.y}
           mode={contextMenu.mode}
           entry={contextMenu.entry}
+          selectedCount={selectedPaths.size}
           onClose={() => setContextMenu(null)}
           onDownload={handleDownload}
           onDelete={handleDelete}
+          onDeleteSelected={handleDeleteSelected}
           onRename={handleRename}
           onOpen={handleOpen}
           onCopyPath={handleCopyPath}
@@ -909,9 +942,11 @@ export function FileBrowser({
           onProperties={handleProperties}
           onRefresh={onRefresh}
           onNewFolder={handleNewFolder}
+          onEditInEditor={handleEditInEditor}
           currentPath={currentPath}
           showProperties={Boolean(capabilities?.fileProperties)}
           canPaste={canPaste}
+          hasEditor={Boolean(editorPath)}
         />
       )}
 
@@ -923,6 +958,42 @@ export function FileBrowser({
         onClose={() => setPropertiesPath(null)}
         onSaved={onRefresh}
       />
+
+      {/* Delete confirmation */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-40 bg-black/30" onClick={() => setDeleteConfirm(null)}>
+          <div
+            className="fixed z-50 bg-popover border border-border rounded-lg shadow-lg p-4 w-80"
+            style={{ left: "50%", top: "50%", transform: "translate(-50%, -50%)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-sm font-semibold mb-2">Confirm Delete</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              {deleteConfirm.entries.length === 1
+                ? <>Are you sure you want to delete <span className="font-medium text-foreground">{deleteConfirm.entries[0].name}</span>?</>
+                : <>Are you sure you want to delete <span className="font-medium text-foreground">{deleteConfirm.entries.length} items</span>?</>}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="px-3 py-1.5 text-xs rounded-md hover:bg-accent"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const toDelete = deleteConfirm.entries;
+                  setDeleteConfirm(null);
+                  void executeDelete(toDelete);
+                }}
+                className="px-3 py-1.5 text-xs rounded-md bg-destructive text-destructive-foreground"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Inline rename */}
       {renamingPath && (

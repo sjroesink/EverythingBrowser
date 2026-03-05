@@ -1,45 +1,43 @@
-import type { ConnectionConfig } from "@/types/connection";
+import { ArrowUpDown, Settings } from "lucide-react";
 
 interface StatusBarProps {
-  activeConfig: ConnectionConfig | null;
   transferCount: number;
+  isTransfersOpen: boolean;
   onToggleTransfers: () => void;
+  onOpenSettings: () => void;
 }
 
 export function StatusBar({
-  activeConfig,
   transferCount,
+  isTransfersOpen,
   onToggleTransfers,
+  onOpenSettings,
 }: StatusBarProps) {
-  const getConnectionLabel = () => {
-    if (!activeConfig) return "Not connected";
-    switch (activeConfig.type) {
-      case "Sftp":
-        return `SFTP — ${activeConfig.username}@${activeConfig.host}:${activeConfig.port}`;
-      case "BackblazeB2":
-        return `B2 — ${activeConfig.bucketName}`;
-    }
-  };
-
   return (
     <div className="flex items-center justify-between h-6 px-3 bg-sidebar border-t border-sidebar-border text-xs text-muted-foreground shrink-0">
-      <div className="flex items-center gap-2">
-        <span
-          className={`w-1.5 h-1.5 rounded-full ${
-            activeConfig ? "bg-success" : "bg-muted-foreground/30"
-          }`}
-        />
-        <span>{getConnectionLabel()}</span>
-      </div>
-
-      {transferCount > 0 && (
-        <button
-          onClick={onToggleTransfers}
-          className="hover:text-foreground transition-colors"
-        >
-          {transferCount} transfer{transferCount !== 1 ? "s" : ""} active
-        </button>
-      )}
+      <button
+        onClick={onToggleTransfers}
+        className={`flex items-center gap-1.5 hover:text-foreground transition-colors ${
+          isTransfersOpen ? "text-foreground" : ""
+        }`}
+      >
+        <ArrowUpDown className="w-3 h-3" />
+        <span>
+          Transfers
+          {transferCount > 0 && (
+            <span className="ml-1 text-primary font-medium">
+              ({transferCount})
+            </span>
+          )}
+        </span>
+      </button>
+      <button
+        onClick={onOpenSettings}
+        className="flex items-center gap-1.5 hover:text-foreground transition-colors"
+        title="Settings"
+      >
+        <Settings className="w-3 h-3" />
+      </button>
     </div>
   );
 }

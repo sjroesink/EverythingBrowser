@@ -1,5 +1,14 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
+const isDetachedWindow = getCurrentWindow().label.startsWith("detached-");
+
+const noopStorage: StateStorage = {
+  getItem: () => null,
+  setItem: () => {},
+  removeItem: () => {},
+};
 
 export type SplitDirection = "horizontal" | "vertical";
 
@@ -303,14 +312,17 @@ export const useLayoutStore = create<LayoutStore>()(
         set((state) => {
           const newRoot = updateNodeInTree(state.root, paneId, (node) => {
             if (node.type !== "pane") return node;
+            const oldIndex = node.tabIds.indexOf(tabId);
             const newTabIds = node.tabIds.filter((id) => id !== tabId);
+            // Pick the neighbor tab: prefer same index (right neighbor), fallback to left
+            const nextActiveId =
+              node.activeTabId === tabId
+                ? (newTabIds[Math.min(oldIndex, newTabIds.length - 1)] ?? null)
+                : node.activeTabId;
             return {
               ...node,
               tabIds: newTabIds,
-              activeTabId:
-                node.activeTabId === tabId
-                  ? newTabIds[0] ?? null
-                  : node.activeTabId,
+              activeTabId: nextActiveId,
             };
           });
           const cleaned = cleanupTree(newRoot);
@@ -513,14 +525,16 @@ export const useLayoutStore = create<LayoutStore>()(
           const removeFromNode = (node: LayoutNode): LayoutNode => {
             if (node.type === "pane") {
               if (!node.tabIds.includes(tabId)) return node;
+              const oldIndex = node.tabIds.indexOf(tabId);
               const newTabIds = node.tabIds.filter((id) => id !== tabId);
+              const nextActiveId =
+                node.activeTabId === tabId
+                  ? (newTabIds[Math.min(oldIndex, newTabIds.length - 1)] ?? null)
+                  : node.activeTabId;
               return {
                 ...node,
                 tabIds: newTabIds,
-                activeTabId:
-                  node.activeTabId === tabId
-                    ? newTabIds[0] ?? null
-                    : node.activeTabId,
+                activeTabId: nextActiveId,
               };
             }
             return {
@@ -540,7 +554,7 @@ export const useLayoutStore = create<LayoutStore>()(
     }),
     {
       name: "layout-store-v1",
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => isDetachedWindow ? noopStorage : localStorage),
       partialize: (state) => ({
         root: state.root,
         sidebarCollapsed: state.sidebarCollapsed,

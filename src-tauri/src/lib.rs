@@ -56,6 +56,11 @@ pub fn run() {
         .manage(ConnectionManager::new())
         .manage(CliLaunchState(Mutex::new(None)))
         .setup(|app| {
+            // Clean up orphaned Docker helper containers from previous sessions
+            tauri::async_runtime::spawn(async {
+                commands::docker_commands::cleanup_orphaned_helper_containers().await;
+            });
+
             // Check for --connect CLI arg
             match app.cli().matches() {
                 Ok(matches) => {
@@ -99,13 +104,27 @@ pub fn run() {
             commands::file_commands::get_clipboard_files,
             commands::credential_commands::save_credential,
             commands::credential_commands::delete_credential,
+            commands::docker_commands::list_docker_volumes,
             importer::detect_import_sources,
             importer::get_importable_sessions,
             importer::import_sessions,
+            commands::editor_commands::open_in_editor,
+            commands::editor_commands::open_path_in_explorer,
+            commands::editor_commands::get_app_data_dir,
+            commands::editor_commands::detect_editors,
             get_cli_connection,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Disconnect all active connections (cleans up Docker helper containers)
+                let manager: tauri::State<'_, ConnectionManager> = app.state();
+                tauri::async_runtime::block_on(async {
+                    let _ = manager.disconnect_all().await;
+                });
+            }
+        });
 }
 
 fn handle_cli_connect(app: &tauri::App, connect_value: &str) {

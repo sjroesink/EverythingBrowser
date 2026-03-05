@@ -190,6 +190,23 @@ export function useFileBrowser(connectionId: string | null, initialPath = "/") {
     [entries, anchorIndex]
   );
 
+  // Shift+Click: select range from anchor to target index
+  const selectRange = useCallback(
+    (targetIndex: number) => {
+      const clamped = Math.max(0, Math.min(entries.length - 1, targetIndex));
+      setFocusedIndex(clamped);
+      const start = Math.min(anchorIndex, clamped);
+      const end = Math.max(anchorIndex, clamped);
+      const paths = new Set<string>();
+      for (let i = start; i <= end; i++) {
+        const e = entries[i];
+        if (e && e.name !== "..") paths.add(e.path);
+      }
+      setSelectedPaths(paths);
+    },
+    [entries, anchorIndex]
+  );
+
   // Ctrl+Arrow: move cursor without changing selection
   const moveCursorOnly = useCallback(
     (delta: number) => {
@@ -287,6 +304,7 @@ export function useFileBrowser(connectionId: string | null, initialPath = "/") {
     canGoBack: historyIndex > 0,
     canGoForward: historyIndex < history.length - 1,
     toggleSelection,
+    selectRange,
     selectAll,
     clearSelection,
     moveCursor,
