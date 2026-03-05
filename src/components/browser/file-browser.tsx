@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { BreadcrumbNav } from "./breadcrumb-nav";
@@ -17,21 +17,14 @@ import {
   createDir,
   downloadToTemp,
   ensureDragIcon,
+  getClipboardFiles,
 } from "@/services/file-service";
+import { useLayoutStore } from "@/stores/use-layout-store";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
+import { isEditableTarget } from "@/lib/keyboard";
 import { Loader2, FolderOpen, Upload } from "lucide-react";
 
 const DRAG_THRESHOLD = 5;
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return (
-    target.isContentEditable ||
-    tag === "INPUT" ||
-    tag === "TEXTAREA" ||
-    tag === "SELECT"
-  );
-}
 
 function parseClipboardPaths(text: string): string[] {
   const lines = text
@@ -56,6 +49,7 @@ interface FileBrowserProps {
   error: string | null;
   viewMode: ViewMode;
   selectedPaths: Set<string>;
+  focusedIndex: number;
   canGoBack: boolean;
   canGoForward: boolean;
   onNavigateTo: (path: string) => void;
@@ -65,6 +59,14 @@ interface FileBrowserProps {
   onGoForward: () => void;
   onSetViewMode: (mode: ViewMode) => void;
   onSelect: (path: string, multi: boolean) => void;
+  onSelectAll: () => void;
+  onMoveCursor: (delta: number) => void;
+  onExtendSelection: (delta: number) => void;
+  onMoveCursorOnly: (delta: number) => void;
+  onToggleFocusedSelection: () => void;
+  onJumpTo: (index: number) => void;
+  onSelectToEdge: (index: number) => void;
+  onOpenFocused: () => void;
   onDownload: (entry: FileEntry) => void;
   onUpload: () => void;
   onDropUpload: (localPaths: string[]) => void;
@@ -83,6 +85,7 @@ export function FileBrowser({
   error,
   viewMode,
   selectedPaths,
+  focusedIndex,
   canGoBack,
   canGoForward,
   onNavigateTo,
@@ -92,6 +95,14 @@ export function FileBrowser({
   onGoForward,
   onSetViewMode,
   onSelect,
+  onSelectAll,
+  onMoveCursor,
+  onExtendSelection,
+  onMoveCursorOnly,
+  onToggleFocusedSelection,
+  onJumpTo,
+  onSelectToEdge,
+  onOpenFocused,
   onDownload,
   onUpload,
   onDropUpload,
@@ -115,7 +126,7 @@ export function FileBrowser({
   const [isDragOver, setIsDragOver] = useState(false);
   const [draggedEntry, setDraggedEntry] = useState<FileEntry | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
-  const dragOverRef = useRef(0);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Custom drag refs (avoid stale closures in global event handlers)
   const dragEntryRef = useRef<FileEntry | null>(null);
@@ -127,9 +138,13 @@ export function FileBrowser({
   const dragIconPath = useRef<string>("");
   const lastClickRef = useRef<{ path: string; time: number } | null>(null);
 
-  // Refs for callbacks (avoid stale closures in global mouse handlers)
+  // Refs for callbacks and data (avoid stale closures in global mouse handlers)
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+  const selectedPathsRef = useRef(selectedPaths);
+  selectedPathsRef.current = selectedPaths;
   const handleOpenRef = useRef<(entry: FileEntry) => void>(() => {});
 
   // Ensure drag icon exists on mount
@@ -180,11 +195,13 @@ export function FileBrowser({
 
   const handleOpen = useCallback(
     (entry: FileEntry) => {
-      if (entry.isDir) {
+      if (entry.name === "..") {
+        onGoUp();
+      } else if (entry.isDir) {
         onNavigateTo(entry.path);
       }
     },
-    [onNavigateTo]
+    [onNavigateTo, onGoUp]
   );
   handleOpenRef.current = handleOpen;
 
@@ -221,10 +238,43 @@ export function FileBrowser({
     [connectionId, onRefresh]
   );
 
+  const handleDeleteSelected = useCallback(async () => {
+    const selected = entries.filter(
+      (e) => selectedPaths.has(e.path) && e.name !== ".."
+    );
+    if (selected.length === 0) {
+      // Fall back to focused entry
+      const focused = entries[focusedIndex];
+      if (focused && focused.name !== "..") {
+        await handleDelete(focused);
+      }
+      return;
+    }
+    for (const entry of selected) {
+      try {
+        if (entry.isDir) {
+          await deleteDir(connectionId, entry.path, true);
+        } else {
+          await deleteFile(connectionId, entry.path);
+        }
+      } catch (e) {
+        console.error("Delete failed:", e);
+      }
+    }
+    onRefresh();
+  }, [entries, selectedPaths, focusedIndex, connectionId, onRefresh, handleDelete]);
+
   const handleRename = useCallback((entry: FileEntry) => {
     setRenamingPath(entry.path);
     setNewName(entry.name);
   }, []);
+
+  const handleRenameSelected = useCallback(() => {
+    const focused = entries[focusedIndex];
+    if (focused && focused.name !== "..") {
+      handleRename(focused);
+    }
+  }, [entries, focusedIndex, handleRename]);
 
   const handleCopyPath = useCallback((entry: FileEntry) => {
     navigator.clipboard.writeText(entry.path);
@@ -355,6 +405,8 @@ export function FileBrowser({
   const handleMouseDownEntry = useCallback(
     (entry: FileEntry, e: React.MouseEvent) => {
       if (e.button !== 0) return;
+      // Don't start drag on ".." entry
+      if (entry.name === "..") return;
       // Prevent browser from starting text selection or native drag
       e.preventDefault();
       dragEntryRef.current = entry;
@@ -367,72 +419,133 @@ export function FileBrowser({
     []
   );
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    if (!isActive) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "F5") {
-        e.preventDefault();
-        onRefresh();
-      }
-      if (e.key === "Backspace" && !renamingPath && !newFolderMode) {
-        onGoUp();
-      }
-      if (e.altKey && e.key === "ArrowLeft") {
-        e.preventDefault();
-        onGoBack();
-      }
-      if (e.altKey && e.key === "ArrowRight") {
-        e.preventDefault();
-        onGoForward();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
-        if (isEditableTarget(e.target)) return;
+  // Keyboard shortcuts via centralized system
+  const keyboardHandlers = useMemo(
+    () => ({
+      "file.refresh": () => onRefresh(),
+      "file.goUp": () => {
+        if (!renamingPath && !newFolderMode) onGoUp();
+      },
+      "file.copy": () => {
         const selected = entries.filter((entry) => selectedPaths.has(entry.path));
         if (selected.length > 0) {
-          e.preventDefault();
           onCopyEntries(selected);
         }
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") {
-        if (isEditableTarget(e.target)) return;
-        if (canPaste) {
-          e.preventDefault();
-          onPasteIntoPath(currentPath);
-        }
-      }
-    };
+      },
+      "file.paste": () => {
+        void (async () => {
+          try {
+            const clipboardFiles = await getClipboardFiles();
+            if (clipboardFiles.length > 0) {
+              onDropUpload(clipboardFiles);
+              return;
+            }
+          } catch {
+            // No clipboard files available
+          }
+          if (canPaste) onPasteIntoPath(currentPath);
+        })();
+      },
+      "file.selectAll": () => onSelectAll(),
+      "file.rename": () => handleRenameSelected(),
+      "file.delete": () => {
+        void handleDeleteSelected();
+      },
+      "file.cursorUp": () => onMoveCursor(-1),
+      "file.cursorDown": () => onMoveCursor(1),
+      "file.selectUp": () => onExtendSelection(-1),
+      "file.selectDown": () => onExtendSelection(1),
+      "file.moveCursorUp": () => onMoveCursorOnly(-1),
+      "file.moveCursorDown": () => onMoveCursorOnly(1),
+      "file.toggleSelect": () => onToggleFocusedSelection(),
+      "file.cursorHome": () => onJumpTo(0),
+      "file.cursorEnd": () => onJumpTo(entries.length - 1),
+      "file.selectToHome": () => onSelectToEdge(0),
+      "file.selectToEnd": () => onSelectToEdge(entries.length - 1),
+      "file.open": () => {
+        if (!renamingPath && !newFolderMode) onOpenFocused();
+      },
+    }),
+    [
+      onRefresh,
+      renamingPath,
+      newFolderMode,
+      onGoUp,
+      entries,
+      selectedPaths,
+      onCopyEntries,
+      canPaste,
+      onPasteIntoPath,
+      onDropUpload,
+      currentPath,
+      onSelectAll,
+      handleRenameSelected,
+      handleDeleteSelected,
+      onMoveCursor,
+      onExtendSelection,
+      onMoveCursorOnly,
+      onToggleFocusedSelection,
+      onJumpTo,
+      onSelectToEdge,
+      onOpenFocused,
+    ]
+  );
+
+  useKeyboardShortcuts(keyboardHandlers, { enabled: isActive });
+
+  // Paste event listener (clipboard files / local paths)
+  useEffect(() => {
+    if (!isActive) return;
 
     const handlePasteEvent = (e: ClipboardEvent) => {
       if (isEditableTarget(e.target)) return;
 
+      // Extract clipboard data synchronously before it gets nulled
       const files = Array.from(e.clipboardData?.files ?? []);
       const filePaths = files
         .map((file) => (file as File & { path?: string }).path)
         .filter((value): value is string => Boolean(value));
-
-      if (filePaths.length > 0) {
-        e.preventDefault();
-        onDropUpload(filePaths);
-        return;
-      }
-
       const text = e.clipboardData?.getData("text/plain") ?? "";
-      const localPaths = parseClipboardPaths(text);
-      if (localPaths.length > 0) {
-        e.preventDefault();
-        onDropUpload(localPaths);
-        return;
-      }
 
-      if (canPaste) {
-        e.preventDefault();
-        onPasteIntoPath(currentPath);
-      }
+      e.preventDefault();
+
+      void (async () => {
+        // Try system clipboard files (e.g. Windows Explorer copy)
+        try {
+          const clipboardFiles = await getClipboardFiles();
+          if (clipboardFiles.length > 0) {
+            onDropUpload(clipboardFiles);
+            return;
+          }
+        } catch {
+          // Not available
+        }
+
+        if (filePaths.length > 0) {
+          onDropUpload(filePaths);
+          return;
+        }
+
+        const localPaths = parseClipboardPaths(text);
+        if (localPaths.length > 0) {
+          onDropUpload(localPaths);
+          return;
+        }
+
+        if (canPaste) {
+          onPasteIntoPath(currentPath);
+        }
+      })();
     };
 
-    // Mouse back/forward buttons (buttons 3 & 4)
+    window.addEventListener("paste", handlePasteEvent);
+    return () => window.removeEventListener("paste", handlePasteEvent);
+  }, [isActive, canPaste, onPasteIntoPath, currentPath, onDropUpload]);
+
+  // Mouse back/forward buttons (buttons 3 & 4)
+  useEffect(() => {
+    if (!isActive) return;
+
     const handleMouseUpNav = (e: MouseEvent) => {
       if (e.button === 3) {
         e.preventDefault();
@@ -444,35 +557,12 @@ export function FileBrowser({
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("mouseup", handleMouseUpNav);
-    window.addEventListener("paste", handlePasteEvent);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("mouseup", handleMouseUpNav);
-      window.removeEventListener("paste", handlePasteEvent);
-    };
-  }, [
-    isActive,
-    onRefresh,
-    onGoUp,
-    onGoBack,
-    onGoForward,
-    renamingPath,
-    newFolderMode,
-    entries,
-    selectedPaths,
-    onCopyEntries,
-    canPaste,
-    onPasteIntoPath,
-    currentPath,
-    onDropUpload,
-  ]);
+    return () => window.removeEventListener("mouseup", handleMouseUpNav);
+  }, [isActive, onGoBack, onGoForward]);
 
-  // Tauri native file drop from desktop
+  // Tauri native file drop from desktop (position-based: works for all visible panes)
   useEffect(() => {
-    if (!isActive) return;
-
     const unlisteners: (() => void)[] = [];
 
     const preventWebviewDrop = (event: DragEvent) => {
@@ -485,24 +575,28 @@ export function FileBrowser({
     listen<{ paths: string[]; position: { x: number; y: number } }>(
       "tauri://drag-enter",
       () => {
-        dragOverRef.current++;
         setIsDragOver(true);
       }
     ).then((u) => unlisteners.push(u));
 
     listen("tauri://drag-leave", () => {
-      dragOverRef.current--;
-      if (dragOverRef.current <= 0) {
-        dragOverRef.current = 0;
-        setIsDragOver(false);
-      }
+      setIsDragOver(false);
     }).then((u) => unlisteners.push(u));
 
     listen<{ paths: string[]; position: { x: number; y: number } }>(
       "tauri://drag-drop",
       (event) => {
         setIsDragOver(false);
-        dragOverRef.current = 0;
+
+        // Only handle if the drop position is within this browser's bounds
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        const { x, y } = event.payload.position;
+        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+          return;
+        }
+
         if (event.payload.paths.length > 0) {
           onDropUpload(event.payload.paths);
         }
@@ -514,7 +608,7 @@ export function FileBrowser({
       window.removeEventListener("dragover", preventWebviewDrop);
       window.removeEventListener("drop", preventWebviewDrop);
     };
-  }, [isActive, onDropUpload]);
+  }, [onDropUpload]);
 
   // Custom drag: global mousemove + mouseup handlers
   useEffect(() => {
@@ -568,6 +662,36 @@ export function FileBrowser({
         }
       } else {
         setDropTargetPath(null);
+      }
+
+      // Check if mouse is outside the current pane → escalate to global file drag
+      const paneEl = document.querySelector(`[data-pane-id]`)
+        ? (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest("[data-pane-id]")
+        : null;
+      const currentPaneId = paneEl?.getAttribute("data-pane-id") ?? null;
+
+      // Find which pane this file browser belongs to
+      const ownerPane = document.querySelector(
+        `[data-pane-id] [data-connection-id="${connectionId}"]`
+      )?.closest("[data-pane-id]");
+      const ownerPaneId = ownerPane?.getAttribute("data-pane-id") ?? null;
+
+      if (ownerPaneId && currentPaneId !== ownerPaneId) {
+        // Cursor left the source pane — escalate to global overlay
+        const entry = dragEntryRef.current;
+        if (entry) {
+          const curEntries = entriesRef.current;
+          const curSelected = selectedPathsRef.current;
+          const allEntries = curEntries.filter((e) => curSelected.has(e.path));
+          const dragEntries =
+            curSelected.has(entry.path) && allEntries.length > 0
+              ? allEntries.map((e) => ({ path: e.path, name: e.name, isDir: e.isDir }))
+              : [{ path: entry.path, name: entry.name, isDir: entry.isDir }];
+
+          useLayoutStore.getState().startFileDrag(connectionId, ownerPaneId, dragEntries);
+          resetDragState();
+          return;
+        }
       }
 
       // Check if mouse is outside the window → trigger native drag-out
@@ -667,7 +791,7 @@ export function FileBrowser({
   ]);
 
   return (
-    <div className="flex flex-col h-full relative">
+    <div ref={containerRef} className="flex flex-col h-full relative" data-connection-id={connectionId}>
       {/* Toolbar row */}
       <div className="flex items-center gap-3 px-3 py-2 border-b border-border">
         <Toolbar
@@ -738,6 +862,7 @@ export function FileBrowser({
           <FileList
             entries={entries}
             selectedPaths={selectedPaths}
+            focusedIndex={focusedIndex}
             draggedEntry={draggedEntry}
             dropTargetPath={dropTargetPath}
             onContextMenu={handleContextMenu}
@@ -747,6 +872,7 @@ export function FileBrowser({
           <FileGrid
             entries={entries}
             selectedPaths={selectedPaths}
+            focusedIndex={focusedIndex}
             draggedEntry={draggedEntry}
             dropTargetPath={dropTargetPath}
             onContextMenu={handleContextMenu}
@@ -840,4 +966,3 @@ export function FileBrowser({
     </div>
   );
 }
-

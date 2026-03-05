@@ -144,3 +144,7 @@ export async function downloadToTemp(
 export async function ensureDragIcon(): Promise<string> {
   return invoke<string>("ensure_drag_icon");
 }
+
+export async function getClipboardFiles(): Promise<string[]> {
+  return invoke<string[]>("get_clipboard_files");
+}

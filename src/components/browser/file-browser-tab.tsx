@@ -9,6 +9,7 @@ interface FileBrowserTabProps {
   connectionId: string;
   config: ConnectionConfig;
   isVisible: boolean;
+  isFocused: boolean;
   isConnected: boolean;
   initialPath: string;
   onPathChange: (tabId: string, path: string) => void;
@@ -38,6 +39,7 @@ export function FileBrowserTab({
   connectionId,
   config,
   isVisible,
+  isFocused,
   isConnected,
   initialPath,
   onPathChange,
@@ -129,7 +131,7 @@ export function FileBrowserTab({
     >
       <FileBrowser
         connectionId={connectionId}
-        isActive={isVisible}
+        isActive={isFocused}
         isConnected={isConnected}
         currentPath={browser.currentPath}
         entries={browser.entries}
@@ -137,6 +139,7 @@ export function FileBrowserTab({
         error={browser.error}
         viewMode={browser.viewMode}
         selectedPaths={browser.selectedPaths}
+        focusedIndex={browser.focusedIndex}
         canGoBack={browser.canGoBack}
         canGoForward={browser.canGoForward}
         onNavigateTo={browser.navigateTo}
@@ -146,6 +149,14 @@ export function FileBrowserTab({
         onGoForward={browser.goForward}
         onSetViewMode={browser.setViewMode}
         onSelect={browser.toggleSelection}
+        onSelectAll={browser.selectAll}
+        onMoveCursor={browser.moveCursor}
+        onExtendSelection={browser.extendSelection}
+        onMoveCursorOnly={browser.moveCursorOnly}
+        onToggleFocusedSelection={browser.toggleFocusedSelection}
+        onJumpTo={browser.jumpTo}
+        onSelectToEdge={browser.selectToEdge}
+        onOpenFocused={browser.openFocused}
         onDownload={handleDownload}
         onUpload={handleUpload}
         onDropUpload={handleDropUpload}

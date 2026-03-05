@@ -5,7 +5,8 @@ import { Titlebar } from "@/components/layout/titlebar";
 import { Sidebar } from "@/components/layout/sidebar";
 import { StatusBar } from "@/components/layout/status-bar";
 import { LayoutRenderer } from "@/components/layout/layout-renderer";
-import { DockingOverlay } from "@/components/layout/docking-overlay";
+import { DockingOverlay, type ConnectionDropTarget, type TabDropTarget } from "@/components/layout/docking-overlay";
+import { FileDragOverlay } from "@/components/layout/file-drag-overlay";
 import { TransferPanel } from "@/components/transfers/transfer-panel";
 import { ConnectionDialog } from "@/components/connections/connection-dialog";
 import { ImportDialog } from "@/components/onboarding/import-dialog";
@@ -16,11 +17,17 @@ import {
 import { useTheme } from "@/hooks/use-theme";
 import { useConnections } from "@/hooks/use-connections";
 import { useTransferQueue } from "@/hooks/use-transfer-queue";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useTabsStore } from "@/stores/use-tabs-store";
-import { useLayoutStore } from "@/stores/use-layout-store";
+import { useLayoutStore, type LayoutNode, type PaneNode } from "@/stores/use-layout-store";
 import type { ConnectionConfig, Tab } from "@/types/connection";
 import type { FileEntry } from "@/types/filesystem";
 import { copyToSystemClipboard } from "@/services/file-service";
+
+function findPaneById(node: LayoutNode, id: string): PaneNode | null {
+  if (node.type === "pane") return node.id === id ? node : null;
+  return findPaneById(node.children[0], id) ?? findPaneById(node.children[1], id);
+}
 
 interface ClipboardSelection {
   sourceConnectionId: string;
@@ -52,6 +59,8 @@ export default function App() {
   const sidebarCollapsed = useLayoutStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useLayoutStore((s) => s.toggleSidebar);
   const tabDrag = useLayoutStore((s) => s.tabDrag);
+  const connectionDrag = useLayoutStore((s) => s.connectionDrag);
+  const fileDrag = useLayoutStore((s) => s.fileDrag);
   const addTabToPane = useLayoutStore((s) => s.addTabToPane);
   const getFirstPaneId = useLayoutStore((s) => s.getFirstPaneId);
 
@@ -125,17 +134,97 @@ export default function App() {
     }
   }, [connectionsLoaded, savedConnections, onboardingChecked]);
 
-  // Ctrl+B to toggle sidebar
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "b") {
-        e.preventDefault();
-        toggleSidebar();
+  // Global keyboard shortcuts
+  const switchTab = useCallback(
+    (direction: number) => {
+      const layout = useLayoutStore.getState();
+      const paneId = layout.focusedPaneId ?? layout.getFirstPaneId();
+      const pane = findPaneById(layout.root, paneId);
+      if (!pane || pane.tabIds.length === 0) return;
+      const currentIndex = pane.activeTabId
+        ? pane.tabIds.indexOf(pane.activeTabId)
+        : 0;
+      const nextIndex =
+        (currentIndex + direction + pane.tabIds.length) % pane.tabIds.length;
+      layout.setActiveTabInPane(paneId, pane.tabIds[nextIndex]);
+    },
+    []
+  );
+
+  const closeActiveTab = useCallback(() => {
+    const layout = useLayoutStore.getState();
+    const paneId = layout.focusedPaneId ?? layout.getFirstPaneId();
+    const pane = findPaneById(layout.root, paneId);
+    if (!pane || !pane.activeTabId) return;
+    const tabId = pane.activeTabId;
+    const tab = tabs.find((t) => t.id === tabId);
+    layout.removeTabFromPane(paneId, tabId);
+    closeTabInStore(tabId);
+    if (tab) {
+      const otherTabs = tabs.filter(
+        (t) => t.id !== tabId && t.connectionId === tab.connectionId
+      );
+      if (otherTabs.length === 0) {
+        void disconnect(tab.connectionId);
       }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggleSidebar]);
+    }
+  }, [tabs, closeTabInStore, disconnect]);
+
+  const splitActivePane = useCallback(
+    (direction: "vertical" | "horizontal") => {
+      const layout = useLayoutStore.getState();
+      const paneId = layout.focusedPaneId ?? layout.getFirstPaneId();
+      const pane = findPaneById(layout.root, paneId);
+      if (!pane || !pane.activeTabId) return;
+      const tab = tabs.find((t) => t.id === pane.activeTabId);
+      if (!tab) return;
+      const newTabId = openTabInStore(tab.config, tab.connectionId);
+      useTabsStore.getState().setTabPath(newTabId, tab.currentPath);
+      layout.splitPane(paneId, direction, newTabId);
+    },
+    [tabs, openTabInStore]
+  );
+
+  const globalShortcutHandlers = useMemo(
+    () => ({
+      "sidebar.toggle": () => toggleSidebar(),
+      "tab.next": () => switchTab(1),
+      "tab.prev": () => switchTab(-1),
+      "tab.close": () => closeActiveTab(),
+      "tab.closeAll": () => {
+        const layout = useLayoutStore.getState();
+        const paneId = layout.focusedPaneId ?? layout.getFirstPaneId();
+        const pane = findPaneById(layout.root, paneId);
+        if (!pane) return;
+        for (const tabId of [...pane.tabIds]) {
+          const tab = tabs.find((t) => t.id === tabId);
+          layout.removeTabFromPane(paneId, tabId);
+          closeTabInStore(tabId);
+          if (tab) {
+            const otherTabs = tabs.filter(
+              (t) => t.id !== tabId && t.connectionId === tab.connectionId
+            );
+            if (otherTabs.length === 0) {
+              void disconnect(tab.connectionId);
+            }
+          }
+        }
+      },
+      "pane.splitVertical": () => splitActivePane("vertical"),
+      "pane.splitHorizontal": () => splitActivePane("horizontal"),
+      "pane.splitDuplicate": () => {
+        const layout = useLayoutStore.getState();
+        const paneId = layout.focusedPaneId ?? layout.getFirstPaneId();
+        const el = document.querySelector(`[data-pane-id="${paneId}"]`);
+        const direction =
+          el && el.clientWidth > el.clientHeight ? "horizontal" : "vertical";
+        splitActivePane(direction);
+      },
+    }),
+    [toggleSidebar, switchTab, closeActiveTab, splitActivePane, tabs, closeTabInStore, disconnect]
+  );
+
+  useKeyboardShortcuts(globalShortcutHandlers);
 
   // Listen for tabs reattaching from closed detached windows
   useEffect(() => {
@@ -175,9 +264,16 @@ export default function App() {
   const closeTab = useCallback(
     (tabId: string) => {
       const tab = tabs.find((t) => t.id === tabId);
+      useLayoutStore.getState().removeTabFromAllPanes(tabId);
       closeTabInStore(tabId);
       if (tab) {
-        void disconnect(tab.connectionId);
+        // Only disconnect if no other tabs use this connection
+        const otherTabs = tabs.filter(
+          (t) => t.id !== tabId && t.connectionId === tab.connectionId
+        );
+        if (otherTabs.length === 0) {
+          void disconnect(tab.connectionId);
+        }
       }
     },
     [tabs, closeTabInStore, disconnect]
@@ -195,14 +291,62 @@ export default function App() {
     [connect, openTab]
   );
 
-  const handleDisconnect = useCallback(
+  const handleCloseAllTabs = useCallback(
     (connectionId: string) => {
-      const tab = tabs.find((t) => t.connectionId === connectionId);
-      if (tab) {
+      const connectionTabs = tabs.filter((t) => t.connectionId === connectionId);
+      for (const tab of connectionTabs) {
         closeTab(tab.id);
       }
     },
     [tabs, closeTab]
+  );
+
+  const handleDuplicateTab = useCallback(
+    async (tabId: string) => {
+      const tab = tabs.find((t) => t.id === tabId);
+      if (!tab) return;
+
+      try {
+        const connectionId = await connect(tab.config);
+        const newTabId = openTabInStore(tab.config, connectionId);
+        // Place the duplicate in the same pane as the original
+        const paneId = useLayoutStore.getState().findPaneForTab(tabId);
+        if (paneId) {
+          addTabToPane(paneId, newTabId);
+        } else {
+          addTabToPane(getFirstPaneId(), newTabId);
+        }
+      } catch {
+        // Connection error handled in hook
+      }
+    },
+    [tabs, connect, openTabInStore, addTabToPane, getFirstPaneId]
+  );
+
+  const handleCloseAllTabsForConnection = useCallback(
+    (connectionId: string) => {
+      // Close all tabs across all panes for this connection
+      const connectionTabs = tabs.filter((t) => t.connectionId === connectionId);
+      for (const tab of connectionTabs) {
+        useLayoutStore.getState().removeTabFromAllPanes(tab.id);
+        closeTabInStore(tab.id);
+        void disconnect(tab.connectionId);
+      }
+    },
+    [tabs, closeTabInStore, disconnect]
+  );
+
+  const handleDisconnectIfUnused = useCallback(
+    (connectionId: string) => {
+      // Check if any remaining tabs use this connection
+      const remaining = useTabsStore.getState().tabs.filter(
+        (t) => t.connectionId === connectionId
+      );
+      if (remaining.length === 0) {
+        void disconnect(connectionId);
+      }
+    },
+    [disconnect]
   );
 
   const handleFocusConnection = useCallback(
@@ -216,6 +360,55 @@ export default function App() {
       }
     },
     [tabs]
+  );
+
+  const handleConnectionDrop = useCallback(
+    async (configId: string, target: ConnectionDropTarget) => {
+      const saved = savedConnections.find((c) => c.config.id === configId);
+      if (!saved) return;
+
+      try {
+        const connectionId = await connect(saved.config);
+        const tabId = openTabInStore(saved.config, connectionId);
+
+        const layout = useLayoutStore.getState();
+        if (target.type === "pane-center") {
+          layout.addTabToPane(target.paneId, tabId);
+        } else if (target.type === "pane-split") {
+          layout.placeNewTabInSplit(tabId, target.paneId, target.direction, target.insertBefore);
+        } else if (target.type === "edge") {
+          layout.placeNewTabAtEdge(tabId, target.direction, target.insertBefore);
+        }
+      } catch {
+        // Connection error handled in hook
+      }
+    },
+    [savedConnections, connect, openTabInStore]
+  );
+
+  const handleDuplicateTabDrop = useCallback(
+    async (tabId: string, target: TabDropTarget) => {
+      const tab = tabs.find((t) => t.id === tabId);
+      if (!tab) return;
+
+      try {
+        const connectionId = await connect(tab.config);
+        const newTabId = openTabInStore(tab.config, connectionId);
+
+        const layout = useLayoutStore.getState();
+        if (target.type === "pane-center") {
+          layout.addTabToPane(target.paneId, newTabId);
+        } else if (target.type === "pane-split") {
+          layout.placeNewTabInSplit(newTabId, target.paneId, target.direction, target.insertBefore);
+        } else if (target.type === "edge") {
+          layout.placeNewTabAtEdge(newTabId, target.direction, target.insertBefore);
+        }
+        // "detach" type: skip for now (detaching a duplicate is complex)
+      } catch {
+        // Connection error handled in hook
+      }
+    },
+    [tabs, connect, openTabInStore]
   );
 
   const handleSaveConnection = useCallback(
@@ -355,6 +548,37 @@ export default function App() {
     [clipboardSelection, transfers]
   );
 
+  const handleFileDrop = useCallback(
+    (
+      sourceConnectionId: string,
+      entries: { path: string; name: string; isDir: boolean }[],
+      targetConnectionId: string,
+      targetPath: string,
+      onDone?: () => void
+    ) => {
+      if (entries.length === 0) return;
+
+      for (const entry of entries) {
+        const destinationPath =
+          targetPath === "/"
+            ? `/${entry.name}`
+            : `${targetPath}/${entry.name}`;
+
+        transfers.enqueueRemoteCopy(
+          sourceConnectionId,
+          entry.path,
+          targetConnectionId,
+          destinationPath,
+          entry.name,
+          onDone
+        );
+      }
+
+      setShowTransfers(true);
+    },
+    [transfers]
+  );
+
   const fileBrowserCallbacks = useMemo<FileBrowserCallbacks>(
     () => ({
       onDownload: handleDownload,
@@ -362,8 +586,12 @@ export default function App() {
       onDropUpload: handleDropUpload,
       onCopyEntries: handleCopyEntries,
       onPaste: handlePaste,
+      onFileDrop: handleFileDrop,
       canPaste: Boolean(clipboardSelection),
       activeConnectionIds,
+      onDuplicateTab: handleDuplicateTab,
+      onCloseAllTabsForConnection: handleCloseAllTabsForConnection,
+      onDisconnectIfUnused: handleDisconnectIfUnused,
     }),
     [
       handleDownload,
@@ -371,8 +599,12 @@ export default function App() {
       handleDropUpload,
       handleCopyEntries,
       handlePaste,
+      handleFileDrop,
       clipboardSelection,
       activeConnectionIds,
+      handleDuplicateTab,
+      handleCloseAllTabsForConnection,
+      handleDisconnectIfUnused,
     ]
   );
 
@@ -416,14 +648,12 @@ export default function App() {
       <div className="flex flex-1 min-h-0">
         <Sidebar
           savedConnections={savedConnections}
-          activeConnectionIds={activeConnectionIds}
-          isConnecting={isConnecting}
           tabCountByConnection={tabCountByConnection}
           theme={theme}
           collapsed={sidebarCollapsed}
           onSetTheme={setTheme}
           onConnect={handleConnect}
-          onDisconnect={handleDisconnect}
+          onCloseAllTabs={handleCloseAllTabs}
           onFocusConnection={handleFocusConnection}
           onAddConnection={() => {
             setEditingConfig(null);
@@ -439,15 +669,19 @@ export default function App() {
         />
 
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex-1 min-h-0 relative">
+          <div className="flex-1 min-h-0 relative" data-layout-area>
             <FileBrowserProvider value={fileBrowserCallbacks}>
               <LayoutRenderer
                 node={root}
                 savedConnections={savedConnections}
               />
+
+              {fileDrag && <FileDragOverlay />}
             </FileBrowserProvider>
 
-            {tabDrag && <DockingOverlay />}
+            {(tabDrag || connectionDrag) && (
+              <DockingOverlay onConnectionDrop={handleConnectionDrop} onDuplicateTabDrop={handleDuplicateTabDrop} />
+            )}
           </div>
 
           <TransferPanel

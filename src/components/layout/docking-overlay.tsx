@@ -3,7 +3,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { emit } from "@tauri-apps/api/event";
 import { useLayoutStore } from "@/stores/use-layout-store";
 import { useTabsStore } from "@/stores/use-tabs-store";
-import type { LayoutNode, SplitDirection } from "@/stores/use-layout-store";
+import type { SplitDirection } from "@/stores/use-layout-store";
 
 type DockZone = "center" | "top" | "bottom" | "left" | "right";
 
@@ -12,25 +12,61 @@ interface PaneRect {
   rect: DOMRect;
 }
 
-interface ActiveZone {
+/** Which indicator the cursor is hovering */
+type HoveredIndicator = {
+  type: "pane";
   paneId: string;
   zone: DockZone;
-  rect: DOMRect;
+} | {
+  type: "edge";
+  zone: Exclude<DockZone, "center">;
+};
+
+const INDICATOR_SIZE = 30;
+const INDICATOR_GAP = 2;
+const EDGE_INDICATOR_W = 30;
+const EDGE_INDICATOR_H = 30;
+const EDGE_MARGIN = 6;
+
+export type ConnectionDropTarget =
+  | { type: "pane-center"; paneId: string }
+  | { type: "pane-split"; paneId: string; direction: SplitDirection; insertBefore: boolean }
+  | { type: "edge"; direction: SplitDirection; insertBefore: boolean };
+
+export type TabDropTarget =
+  | { type: "pane-center"; paneId: string }
+  | { type: "pane-split"; paneId: string; direction: SplitDirection; insertBefore: boolean }
+  | { type: "edge"; direction: SplitDirection; insertBefore: boolean }
+  | { type: "detach"; screenX: number; screenY: number };
+
+interface DockingOverlayProps {
+  onConnectionDrop?: (configId: string, target: ConnectionDropTarget) => void;
+  onDuplicateTabDrop?: (tabId: string, target: TabDropTarget) => void;
 }
 
-export function DockingOverlay() {
+export function DockingOverlay({ onConnectionDrop, onDuplicateTabDrop }: DockingOverlayProps) {
   const tabDrag = useLayoutStore((s) => s.tabDrag);
-  const splitPane = useLayoutStore((s) => s.splitPane);
+  const connectionDrag = useLayoutStore((s) => s.connectionDrag);
   const moveTabToPane = useLayoutStore((s) => s.moveTabToPane);
   const removeTabFromPane = useLayoutStore((s) => s.removeTabFromPane);
+  const dockTabToSplit = useLayoutStore((s) => s.dockTabToSplit);
+  const dockTabToEdge = useLayoutStore((s) => s.dockTabToEdge);
   const endTabDrag = useLayoutStore((s) => s.endTabDrag);
+  const endConnectionDrag = useLayoutStore((s) => s.endConnectionDrag);
+  const addTabToPane = useLayoutStore((s) => s.addTabToPane);
+  const getFirstPaneId = useLayoutStore((s) => s.getFirstPaneId);
+
+  const isDragging = tabDrag || connectionDrag;
 
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-  const [activeZone, setActiveZone] = useState<ActiveZone | null>(null);
+  const [hovered, setHovered] = useState<HoveredIndicator | null>(null);
+  const [hoveredPaneId, setHoveredPaneId] = useState<string | null>(null);
+  const [ctrlHeld, setCtrlHeld] = useState(false);
   const paneRectsRef = useRef<PaneRect[]>([]);
+  const layoutRectRef = useRef<DOMRect | null>(null);
 
-  // Collect all pane bounding rects
-  const refreshPaneRects = useCallback(() => {
+  // Collect all pane bounding rects + layout container rect
+  const refreshRects = useCallback(() => {
     const paneElements = document.querySelectorAll<HTMLElement>("[data-pane-id]");
     const rects: PaneRect[] = [];
     paneElements.forEach((el) => {
@@ -40,136 +76,258 @@ export function DockingOverlay() {
       }
     });
     paneRectsRef.current = rects;
+
+    const layoutEl = document.querySelector<HTMLElement>("[data-layout-area]");
+    layoutRectRef.current = layoutEl?.getBoundingClientRect() ?? null;
   }, []);
 
-  // Determine which dock zone the cursor is in
+  // Find which pane the cursor is inside
+  const findPaneAtPoint = useCallback((x: number, y: number): PaneRect | null => {
+    for (const pr of paneRectsRef.current) {
+      const { rect } = pr;
+      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+        return pr;
+      }
+    }
+    return null;
+  }, []);
+
+  // Compute indicator positions for a pane (centered cross pattern)
+  const getPaneIndicators = useCallback((rect: DOMRect) => {
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const s = INDICATOR_SIZE;
+    const g = INDICATOR_GAP;
+
+    return {
+      center: new DOMRect(cx - s / 2, cy - s / 2, s, s),
+      top: new DOMRect(cx - s / 2, cy - s / 2 - s - g, s, s),
+      bottom: new DOMRect(cx - s / 2, cy + s / 2 + g, s, s),
+      left: new DOMRect(cx - s / 2 - s - g, cy - s / 2, s, s),
+      right: new DOMRect(cx + s / 2 + g, cy - s / 2, s, s),
+    };
+  }, []);
+
+  // Compute edge indicator positions (centered on each edge of the layout area)
+  const getEdgeIndicators = useCallback(() => {
+    const lr = layoutRectRef.current;
+    if (!lr) return null;
+
+    const w = EDGE_INDICATOR_W;
+    const h = EDGE_INDICATOR_H;
+    const m = EDGE_MARGIN;
+
+    return {
+      top: new DOMRect(lr.left + lr.width / 2 - w / 2, lr.top + m, w, h),
+      bottom: new DOMRect(lr.left + lr.width / 2 - w / 2, lr.bottom - h - m, w, h),
+      left: new DOMRect(lr.left + m, lr.top + lr.height / 2 - h / 2, w, h),
+      right: new DOMRect(lr.right - w - m, lr.top + lr.height / 2 - h / 2, w, h),
+    };
+  }, []);
+
+  // Check if point is inside a DOMRect
+  const isInRect = (x: number, y: number, r: DOMRect) =>
+    x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height;
+
+  // Hit-test: first check edge indicators, then pane indicators
   const hitTest = useCallback(
-    (x: number, y: number): ActiveZone | null => {
-      for (const { paneId, rect } of paneRectsRef.current) {
-        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-          continue;
+    (x: number, y: number, currentPaneId: string | null): HoveredIndicator | null => {
+      // 1. Check edge indicators
+      const edgeInds = getEdgeIndicators();
+      if (edgeInds) {
+        for (const zone of ["top", "bottom", "left", "right"] as const) {
+          if (isInRect(x, y, edgeInds[zone])) {
+            return { type: "edge", zone };
+          }
         }
+      }
 
-        // Relative position within the pane (0-1)
-        const relX = (x - rect.left) / rect.width;
-        const relY = (y - rect.top) / rect.height;
-
-        const edgeThreshold = 0.25;
-        let zone: DockZone = "center";
-
-        if (relY < edgeThreshold) {
-          zone = "top";
-        } else if (relY > 1 - edgeThreshold) {
-          zone = "bottom";
-        } else if (relX < edgeThreshold) {
-          zone = "left";
-        } else if (relX > 1 - edgeThreshold) {
-          zone = "right";
+      // 2. Check pane indicators for the pane under cursor
+      if (currentPaneId) {
+        const pr = paneRectsRef.current.find((p) => p.paneId === currentPaneId);
+        if (pr) {
+          const paneInds = getPaneIndicators(pr.rect);
+          for (const zone of ["center", "top", "bottom", "left", "right"] as const) {
+            if (isInRect(x, y, paneInds[zone])) {
+              return { type: "pane", paneId: currentPaneId, zone };
+            }
+          }
         }
-
-        // Compute highlight rect for the zone
-        const zoneRect = getZoneRect(rect, zone);
-
-        return { paneId, zone, rect: zoneRect };
       }
 
       return null;
     },
-    []
+    [getEdgeIndicators, getPaneIndicators]
   );
 
-  useEffect(() => {
-    if (!tabDrag) return;
+  // Compute the highlight rect for the current hover
+  const getHighlightRect = useCallback((): DOMRect | null => {
+    if (!hovered) return null;
 
-    refreshPaneRects();
+    if (hovered.type === "edge") {
+      const lr = layoutRectRef.current;
+      if (!lr) return null;
+      switch (hovered.zone) {
+        case "top": return new DOMRect(lr.left, lr.top, lr.width, lr.height / 2);
+        case "bottom": return new DOMRect(lr.left, lr.top + lr.height / 2, lr.width, lr.height / 2);
+        case "left": return new DOMRect(lr.left, lr.top, lr.width / 2, lr.height);
+        case "right": return new DOMRect(lr.left + lr.width / 2, lr.top, lr.width / 2, lr.height);
+      }
+    }
+
+    if (hovered.type === "pane") {
+      const pr = paneRectsRef.current.find((p) => p.paneId === hovered.paneId);
+      if (!pr) return null;
+      const { left, top, width, height } = pr.rect;
+      switch (hovered.zone) {
+        case "center": return new DOMRect(left, top, width, height);
+        case "top": return new DOMRect(left, top, width, height / 2);
+        case "bottom": return new DOMRect(left, top + height / 2, width, height / 2);
+        case "left": return new DOMRect(left, top, width / 2, height);
+        case "right": return new DOMRect(left + width / 2, top, width / 2, height);
+      }
+    }
+
+    return null;
+  }, [hovered]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    refreshRects();
 
     const handleMouseMove = (e: MouseEvent) => {
       setMousePos({ x: e.clientX, y: e.clientY });
-      const zone = hitTest(e.clientX, e.clientY);
-      setActiveZone(zone);
+      setCtrlHeld(e.ctrlKey);
+
+      const pane = findPaneAtPoint(e.clientX, e.clientY);
+      const currentPaneId = pane?.paneId ?? null;
+      setHoveredPaneId(currentPaneId);
+
+      const hit = hitTest(e.clientX, e.clientY, currentPaneId);
+      setHovered(hit);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Control") setCtrlHeld(true);
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Control") setCtrlHeld(false);
     };
 
     const handleMouseUp = (e: MouseEvent) => {
-      const zone = hitTest(e.clientX, e.clientY);
+      const pane = findPaneAtPoint(e.clientX, e.clientY);
+      const currentPaneId = pane?.paneId ?? null;
+      const hit = hitTest(e.clientX, e.clientY, currentPaneId);
 
       if (tabDrag) {
-        const { tabId, sourcePaneId } = tabDrag;
-
-        if (zone) {
-          if (zone.zone === "center") {
-            // Move tab to the target pane's tab group
-            if (zone.paneId !== sourcePaneId) {
-              moveTabToPane(tabId, sourcePaneId, zone.paneId);
-            }
-          } else {
-            // Split the target pane
-            const direction = getDirectionForZone(zone.zone);
-            // Remove from source first
-            removeTabFromPane(sourcePaneId, tabId);
-            // Then split target with the tab
-            if (zone.zone === "top" || zone.zone === "left") {
-              splitPaneBefore(zone.paneId, direction, tabId);
-            } else {
-              splitPane(zone.paneId, direction, tabId);
-            }
-          }
-        } else {
-          // Dropped outside all panes - detach to new window
-          detachTab(tabId, sourcePaneId, e.screenX, e.screenY);
-        }
+        handleTabDrop(tabDrag, hit, e);
+        endTabDrag();
+      } else if (connectionDrag) {
+        handleConnectionDrop(connectionDrag.configId, hit);
+        endConnectionDrag();
       }
-
-      endTabDrag();
     };
 
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("keyup", handleKeyUp);
 
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("keyup", handleKeyUp);
     };
-  }, [tabDrag, refreshPaneRects, hitTest, splitPane, moveTabToPane, removeTabFromPane, endTabDrag]);
+  }, [isDragging, tabDrag, connectionDrag, refreshRects, findPaneAtPoint, hitTest]);
 
-  // Custom split that puts the new pane first (for top/left drops)
-  const splitPaneBefore = useCallback(
-    (paneId: string, direction: SplitDirection, newTabId: string) => {
-      const layoutState = useLayoutStore.getState();
-      const root = layoutState.root;
+  const handleTabDrop = useCallback(
+    (drag: { tabId: string; sourcePaneId: string }, hit: HoveredIndicator | null, e: MouseEvent) => {
+      const { tabId, sourcePaneId } = drag;
+      const isDuplicate = e.ctrlKey && !!onDuplicateTabDrop;
 
-      // We need to do a custom split where the new pane comes first
-      const pane = findNodeById(root, paneId);
-      if (!pane || pane.type !== "pane") return;
+      if (isDuplicate) {
+        // Ctrl held: duplicate the tab instead of moving it
+        let target: TabDropTarget;
+        if (hit) {
+          if (hit.type === "edge") {
+            const direction: SplitDirection =
+              hit.zone === "top" || hit.zone === "bottom" ? "vertical" : "horizontal";
+            const insertBefore = hit.zone === "top" || hit.zone === "left";
+            target = { type: "edge", direction, insertBefore };
+          } else if (hit.zone === "center") {
+            target = { type: "pane-center", paneId: hit.paneId };
+          } else {
+            const direction: SplitDirection =
+              hit.zone === "top" || hit.zone === "bottom" ? "vertical" : "horizontal";
+            const insertBefore = hit.zone === "top" || hit.zone === "left";
+            target = { type: "pane-split", paneId: hit.paneId, direction, insertBefore };
+          }
+        } else {
+          target = { type: "detach", screenX: e.screenX, screenY: e.screenY };
+        }
+        onDuplicateTabDrop(tabId, target);
+        return;
+      }
 
-      const newPaneNode = {
-        type: "pane" as const,
-        id: crypto.randomUUID(),
-        tabIds: [newTabId],
-        activeTabId: newTabId,
-      };
-
-      const splitNode = {
-        type: "split" as const,
-        id: crypto.randomUUID(),
-        direction,
-        children: [newPaneNode, pane] as [LayoutNode, LayoutNode],
-        sizes: [50, 50] as [number, number],
-      };
-
-      // Replace the pane with the split node
-      const newRoot = replaceNodeInTree(root, paneId, splitNode);
-      useLayoutStore.setState({ root: newRoot });
+      if (hit) {
+        if (hit.type === "edge") {
+          const direction: SplitDirection =
+            hit.zone === "top" || hit.zone === "bottom" ? "vertical" : "horizontal";
+          const insertBefore = hit.zone === "top" || hit.zone === "left";
+          dockTabToEdge(tabId, sourcePaneId, direction, insertBefore);
+        } else if (hit.type === "pane") {
+          if (hit.zone === "center") {
+            if (hit.paneId !== sourcePaneId) {
+              moveTabToPane(tabId, sourcePaneId, hit.paneId);
+            }
+          } else {
+            const direction: SplitDirection =
+              hit.zone === "top" || hit.zone === "bottom" ? "vertical" : "horizontal";
+            const insertBefore = hit.zone === "top" || hit.zone === "left";
+            dockTabToSplit(tabId, sourcePaneId, hit.paneId, direction, insertBefore);
+          }
+        }
+      } else {
+        detachTab(tabId, sourcePaneId, e.screenX, e.screenY);
+      }
     },
-    []
+    [dockTabToSplit, dockTabToEdge, moveTabToPane, onDuplicateTabDrop]
   );
 
-  // Detach a tab to a new OS window
+  const handleConnectionDrop = useCallback(
+    (configId: string, hit: HoveredIndicator | null) => {
+      if (!hit) {
+        // Dropped outside — just open in first pane
+        onConnectionDrop?.(configId, { type: "pane-center", paneId: getFirstPaneId() });
+        return;
+      }
+
+      if (hit.type === "edge") {
+        const direction: SplitDirection =
+          hit.zone === "top" || hit.zone === "bottom" ? "vertical" : "horizontal";
+        const insertBefore = hit.zone === "top" || hit.zone === "left";
+        onConnectionDrop?.(configId, { type: "edge", direction, insertBefore });
+      } else if (hit.type === "pane") {
+        if (hit.zone === "center") {
+          onConnectionDrop?.(configId, { type: "pane-center", paneId: hit.paneId });
+        } else {
+          const direction: SplitDirection =
+            hit.zone === "top" || hit.zone === "bottom" ? "vertical" : "horizontal";
+          const insertBefore = hit.zone === "top" || hit.zone === "left";
+          onConnectionDrop?.(configId, { type: "pane-split", paneId: hit.paneId, direction, insertBefore });
+        }
+      }
+    },
+    [onConnectionDrop, getFirstPaneId]
+  );
+
   const detachTab = useCallback(
     (tabId: string, sourcePaneId: string, screenX: number, screenY: number) => {
       const tab = useTabsStore.getState().getTab(tabId);
       if (!tab) return;
 
-      // Remove from layout and global store
       removeTabFromPane(sourcePaneId, tabId);
       useTabsStore.getState().closeTab(tabId);
 
@@ -185,9 +343,7 @@ export function DockingOverlay() {
         y: screenY - 50,
       });
 
-      // Send the tab data once the window is ready
       detachedWindow.once("tauri://created", () => {
-        // Small delay to let the React app mount
         setTimeout(() => {
           void emit("tab-transfer", { tab });
         }, 300);
@@ -196,172 +352,189 @@ export function DockingOverlay() {
     [removeTabFromPane]
   );
 
-  if (!tabDrag) return null;
+  if (!isDragging) return null;
 
-  // Find the tab name for the ghost
-  const draggedTab = document.querySelector(`[data-tab-id="${tabDrag.tabId}"]`);
-  const tabName = draggedTab?.querySelector("span")?.textContent ?? "Tab";
+  // Get the display name for the ghost
+  let ghostName = "Tab";
+  if (tabDrag) {
+    const draggedTab = document.querySelector(`[data-tab-id="${tabDrag.tabId}"]`);
+    ghostName = draggedTab?.querySelector("span")?.textContent ?? "Tab";
+  } else if (connectionDrag) {
+    ghostName = connectionDrag.name;
+  }
+
+  const highlightRect = getHighlightRect();
+
+  // Find the pane rect for the hovered pane (to show indicators)
+  const hoveredPaneRect = hoveredPaneId
+    ? paneRectsRef.current.find((p) => p.paneId === hoveredPaneId)?.rect ?? null
+    : null;
+
+  const edgeIndicators = getEdgeIndicators();
 
   return (
-    <div className="absolute inset-0 z-50">
-      {/* Zone highlight */}
-      {activeZone && (
+    <div className="fixed inset-0 z-50">
+      {/* Zone highlight preview */}
+      {highlightRect && (
         <div
-          className="absolute bg-primary/20 border-2 border-primary/40 rounded-sm transition-all duration-75"
+          className="absolute bg-primary/20 border-2 border-primary/40 rounded-sm pointer-events-none transition-all duration-75"
           style={{
-            left: activeZone.rect.left,
-            top: activeZone.rect.top,
-            width: activeZone.rect.width,
-            height: activeZone.rect.height,
+            left: highlightRect.left,
+            top: highlightRect.top,
+            width: highlightRect.width,
+            height: highlightRect.height,
           }}
         />
       )}
 
-      {/* Dock zone indicators for each pane */}
-      {paneRectsRef.current.map(({ paneId, rect }) => (
-        <DockIndicators key={paneId} paneRect={rect} activeZone={activeZone?.paneId === paneId ? activeZone.zone : null} />
-      ))}
+      {/* Pane indicators - only shown for the pane under cursor */}
+      {hoveredPaneRect && (
+        <PaneIndicators
+          paneRect={hoveredPaneRect}
+          hovered={hovered?.type === "pane" ? hovered.zone : null}
+        />
+      )}
+
+      {/* Edge indicators - always visible during drag */}
+      {edgeIndicators && (
+        <EdgeIndicators
+          indicators={edgeIndicators}
+          hovered={hovered?.type === "edge" ? hovered.zone : null}
+        />
+      )}
 
       {/* Ghost tab following cursor */}
       <div
-        className="fixed pointer-events-none z-[60] px-3 py-1.5 bg-sidebar border border-border rounded-md shadow-lg text-sm text-foreground opacity-80"
+        className="fixed pointer-events-none z-[60] px-3 py-1.5 bg-sidebar border border-border rounded-md shadow-lg text-sm text-foreground opacity-80 flex items-center gap-1.5"
         style={{
           left: mousePos.x + 12,
           top: mousePos.y + 12,
         }}
       >
-        {tabName}
+        {ctrlHeld && tabDrag && (
+          <span className="text-primary font-bold text-xs">+</span>
+        )}
+        {ghostName}
       </div>
     </div>
   );
 }
 
-function DockIndicators({
+/** 5-zone cross pattern centered in a pane */
+function PaneIndicators({
   paneRect,
-  activeZone,
+  hovered,
 }: {
   paneRect: DOMRect;
-  activeZone: DockZone | null;
+  hovered: DockZone | null;
 }) {
   const cx = paneRect.left + paneRect.width / 2;
   const cy = paneRect.top + paneRect.height / 2;
-  const size = 28;
-  const gap = 2;
+  const s = INDICATOR_SIZE;
+  const g = INDICATOR_GAP;
 
   const indicators: { zone: DockZone; x: number; y: number }[] = [
-    { zone: "center", x: cx - size / 2, y: cy - size / 2 },
-    { zone: "top", x: cx - size / 2, y: cy - size / 2 - size - gap },
-    { zone: "bottom", x: cx - size / 2, y: cy + size / 2 + gap },
-    { zone: "left", x: cx - size / 2 - size - gap, y: cy - size / 2 },
-    { zone: "right", x: cx + size / 2 + gap, y: cy - size / 2 },
+    { zone: "center", x: cx - s / 2, y: cy - s / 2 },
+    { zone: "top", x: cx - s / 2, y: cy - s / 2 - s - g },
+    { zone: "bottom", x: cx - s / 2, y: cy + s / 2 + g },
+    { zone: "left", x: cx - s / 2 - s - g, y: cy - s / 2 },
+    { zone: "right", x: cx + s / 2 + g, y: cy - s / 2 },
   ];
 
   return (
     <>
       {indicators.map(({ zone, x, y }) => (
-        <div
-          key={zone}
-          className={`absolute pointer-events-none rounded-sm border transition-colors ${
-            activeZone === zone
-              ? "bg-primary/60 border-primary"
-              : "bg-sidebar/90 border-border"
-          }`}
-          style={{
-            left: x,
-            top: y,
-            width: size,
-            height: size,
-          }}
-        >
-          <ZoneIcon zone={zone} active={activeZone === zone} />
-        </div>
+        <Indicator key={zone} zone={zone} x={x} y={y} size={s} active={hovered === zone} />
       ))}
     </>
   );
 }
 
-function ZoneIcon({ zone, active }: { zone: DockZone; active: boolean }) {
+/** Edge indicators at the borders of the layout area */
+function EdgeIndicators({
+  indicators,
+  hovered,
+}: {
+  indicators: Record<"top" | "bottom" | "left" | "right", DOMRect>;
+  hovered: Exclude<DockZone, "center"> | null;
+}) {
+  return (
+    <>
+      {(["top", "bottom", "left", "right"] as const).map((zone) => {
+        const r = indicators[zone];
+        return (
+          <Indicator
+            key={`edge-${zone}`}
+            zone={zone}
+            x={r.left}
+            y={r.top}
+            size={INDICATOR_SIZE}
+            active={hovered === zone}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+/** Single indicator button with an icon */
+function Indicator({
+  zone,
+  x,
+  y,
+  size,
+  active,
+}: {
+  zone: DockZone;
+  x: number;
+  y: number;
+  size: number;
+  active: boolean;
+}) {
+  return (
+    <div
+      className={`absolute pointer-events-none rounded-sm border transition-colors ${
+        active
+          ? "bg-primary/60 border-primary shadow-sm"
+          : "bg-sidebar/90 border-border/80 shadow-sm"
+      }`}
+      style={{ left: x, top: y, width: size, height: size }}
+    >
+      <ZoneIcon zone={zone} active={active} size={size} />
+    </div>
+  );
+}
+
+function ZoneIcon({ zone, active, size }: { zone: DockZone; active: boolean; size: number }) {
   const color = active ? "var(--color-primary-foreground)" : "var(--color-muted-foreground)";
   const fillColor = active ? "var(--color-primary)" : "var(--color-muted-foreground)";
-  const size = 16;
-  const margin = 6;
+  const iconSize = size - 10;
+  const margin = 5;
 
-  // Simple visual indicators showing the split position
   return (
     <svg
-      width={size}
-      height={size}
+      width={iconSize}
+      height={iconSize}
       viewBox="0 0 16 16"
       className="absolute"
       style={{ left: margin, top: margin }}
     >
-      <rect x="1" y="1" width="14" height="14" rx="1" fill="none" stroke={color} strokeWidth="1" opacity="0.5" />
+      <rect x="1" y="1" width="14" height="14" rx="1.5" fill="none" stroke={color} strokeWidth="1.2" opacity="0.5" />
       {zone === "center" && (
-        <rect x="2" y="2" width="12" height="12" rx="0.5" fill={fillColor} opacity="0.4" />
+        <rect x="2" y="2" width="12" height="12" rx="1" fill={fillColor} opacity="0.4" />
       )}
       {zone === "top" && (
-        <rect x="2" y="2" width="12" height="5" rx="0.5" fill={fillColor} opacity="0.6" />
+        <rect x="2" y="2" width="12" height="5.5" rx="1" fill={fillColor} opacity="0.6" />
       )}
       {zone === "bottom" && (
-        <rect x="2" y="9" width="12" height="5" rx="0.5" fill={fillColor} opacity="0.6" />
+        <rect x="2" y="8.5" width="12" height="5.5" rx="1" fill={fillColor} opacity="0.6" />
       )}
       {zone === "left" && (
-        <rect x="2" y="2" width="5" height="12" rx="0.5" fill={fillColor} opacity="0.6" />
+        <rect x="2" y="2" width="5.5" height="12" rx="1" fill={fillColor} opacity="0.6" />
       )}
       {zone === "right" && (
-        <rect x="9" y="2" width="5" height="12" rx="0.5" fill={fillColor} opacity="0.6" />
+        <rect x="8.5" y="2" width="5.5" height="12" rx="1" fill={fillColor} opacity="0.6" />
       )}
     </svg>
   );
-}
-
-function getZoneRect(paneRect: DOMRect, zone: DockZone): DOMRect {
-  const { left, top, width, height } = paneRect;
-
-  switch (zone) {
-    case "top":
-      return new DOMRect(left, top, width, height / 2);
-    case "bottom":
-      return new DOMRect(left, top + height / 2, width, height / 2);
-    case "left":
-      return new DOMRect(left, top, width / 2, height);
-    case "right":
-      return new DOMRect(left + width / 2, top, width / 2, height);
-    case "center":
-    default:
-      return new DOMRect(left, top, width, height);
-  }
-}
-
-function getDirectionForZone(zone: DockZone): SplitDirection {
-  return zone === "top" || zone === "bottom" ? "vertical" : "horizontal";
-}
-
-function findNodeById(
-  root: LayoutNode,
-  id: string
-): LayoutNode | null {
-  if (root.id === id) return root;
-  if (root.type === "split") {
-    return findNodeById(root.children[0], id) ?? findNodeById(root.children[1], id);
-  }
-  return null;
-}
-
-function replaceNodeInTree(
-  root: LayoutNode,
-  targetId: string,
-  replacement: LayoutNode
-): LayoutNode {
-  if (root.id === targetId) return replacement;
-  if (root.type === "split") {
-    return {
-      ...root,
-      children: [
-        replaceNodeInTree(root.children[0], targetId, replacement),
-        replaceNodeInTree(root.children[1], targetId, replacement),
-      ] as [LayoutNode, LayoutNode],
-    };
-  }
-  return root;
 }

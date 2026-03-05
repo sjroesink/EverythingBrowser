@@ -18,6 +18,8 @@ export function PaneView({ paneId, savedConnections }: PaneViewProps) {
   const closeTabInStore = useTabsStore((s) => s.closeTab);
 
   const root = useLayoutStore((s) => s.root);
+  const focusedPaneId = useLayoutStore((s) => s.focusedPaneId);
+  const setFocusedPane = useLayoutStore((s) => s.setFocusedPane);
   const setActiveTabInPane = useLayoutStore((s) => s.setActiveTabInPane);
   const removeTabFromPane = useLayoutStore((s) => s.removeTabFromPane);
 
@@ -29,7 +31,12 @@ export function PaneView({ paneId, savedConnections }: PaneViewProps) {
     onPaste,
     canPaste,
     activeConnectionIds,
+    onDuplicateTab,
+    onCloseAllTabsForConnection,
+    onDisconnectIfUnused,
   } = useFileBrowserContext();
+
+  const isFocused = focusedPaneId === paneId;
 
   // Find this pane in the layout tree
   const paneNode = findPaneById(root, paneId);
@@ -48,11 +55,18 @@ export function PaneView({ paneId, savedConnections }: PaneViewProps) {
     })
     .filter((t): t is NonNullable<typeof t> => t !== null);
 
+  const handleFocusPane = useCallback(() => {
+    if (focusedPaneId !== paneId) {
+      setFocusedPane(paneId);
+    }
+  }, [paneId, focusedPaneId, setFocusedPane]);
+
   const handleSelectTab = useCallback(
     (tabId: string) => {
       setActiveTabInPane(paneId, tabId);
+      setFocusedPane(paneId);
     },
-    [paneId, setActiveTabInPane]
+    [paneId, setActiveTabInPane, setFocusedPane]
   );
 
   const handleCloseTab = useCallback(
@@ -61,21 +75,36 @@ export function PaneView({ paneId, savedConnections }: PaneViewProps) {
       removeTabFromPane(paneId, tabId);
 
       // Check if this tab still exists in any other pane
-      // If not, close it globally
+      // If not, close it globally and disconnect if no other tabs use the connection
       const otherPane = useLayoutStore.getState().findPaneForTab(tabId);
       if (!otherPane) {
         closeTabInStore(tabId);
+        if (tab) {
+          onDisconnectIfUnused(tab.connectionId);
+        }
       }
-
-      // Disconnect is handled by App.tsx watching tab removals
-      void tab; // reference to suppress unused warning
     },
-    [paneId, allTabs, removeTabFromPane, closeTabInStore]
+    [paneId, allTabs, removeTabFromPane, closeTabInStore, onDisconnectIfUnused]
+  );
+
+  const handleCloseOtherTabs = useCallback(
+    (tabId: string) => {
+      for (const tab of paneTabs) {
+        if (tab.id !== tabId) {
+          handleCloseTab(tab.id);
+        }
+      }
+    },
+    [paneTabs, handleCloseTab]
   );
 
   if (paneTabs.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center h-full bg-background">
+      <div
+        className="flex-1 flex items-center justify-center h-full bg-background"
+        data-pane-id={paneId}
+        onMouseDown={handleFocusPane}
+      >
         <div className="text-center">
           <FolderOpen className="w-12 h-12 mx-auto mb-3 text-muted-foreground/20" />
           <p className="text-sm text-muted-foreground/40">
@@ -87,13 +116,21 @@ export function PaneView({ paneId, savedConnections }: PaneViewProps) {
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-background" data-pane-id={paneId}>
+    <div
+      className="flex flex-col h-full min-h-0 bg-background"
+      data-pane-id={paneId}
+      onMouseDown={handleFocusPane}
+    >
       <TabBar
         tabs={paneTabs}
         activeTabId={activeTabId}
         paneId={paneId}
+        isFocused={isFocused}
         onSelectTab={handleSelectTab}
         onCloseTab={handleCloseTab}
+        onDuplicateTab={onDuplicateTab}
+        onCloseOtherTabs={handleCloseOtherTabs}
+        onCloseConnectionTabs={onCloseAllTabsForConnection}
       />
 
       <div className="flex-1 relative min-h-0">
@@ -104,6 +141,7 @@ export function PaneView({ paneId, savedConnections }: PaneViewProps) {
             connectionId={tab.connectionId}
             config={tab.config}
             isVisible={tab.id === activeTabId}
+            isFocused={isFocused && tab.id === activeTabId}
             isConnected={activeConnectionIds.has(tab.connectionId)}
             initialPath={tab.currentPath}
             onPathChange={setTabPath}

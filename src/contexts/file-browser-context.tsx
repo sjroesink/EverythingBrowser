@@ -20,8 +20,18 @@ export interface FileBrowserCallbacks {
     targetPath: string,
     onPasted?: () => void
   ) => void;
+  onFileDrop: (
+    sourceConnectionId: string,
+    entries: { path: string; name: string; isDir: boolean }[],
+    targetConnectionId: string,
+    targetPath: string,
+    onDone?: () => void
+  ) => void;
   canPaste: boolean;
   activeConnectionIds: Set<string>;
+  onDuplicateTab: (tabId: string) => void;
+  onCloseAllTabsForConnection: (connectionId: string) => void;
+  onDisconnectIfUnused: (connectionId: string) => void;
 }
 
 const FileBrowserContext = createContext<FileBrowserCallbacks | null>(null);

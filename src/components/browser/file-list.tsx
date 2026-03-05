@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import {
   Folder,
   File,
@@ -7,6 +8,7 @@ import {
   FileAudio,
   FileCode,
   FileArchive,
+  CornerLeftUp,
 } from "lucide-react";
 import { formatBytes, formatDate, getFileExtension } from "@/lib/utils";
 import type { FileEntry } from "@/types/filesystem";
@@ -14,6 +16,7 @@ import type { FileEntry } from "@/types/filesystem";
 interface FileListProps {
   entries: FileEntry[];
   selectedPaths: Set<string>;
+  focusedIndex: number;
   draggedEntry: FileEntry | null;
   dropTargetPath: string | null;
   onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void;
@@ -21,6 +24,7 @@ interface FileListProps {
 }
 
 function getFileIcon(entry: FileEntry) {
+  if (entry.name === "..") return <CornerLeftUp className="w-4 h-4 text-muted-foreground" />;
   if (entry.isDir) return <Folder className="w-4 h-4 text-primary" />;
 
   const ext = getFileExtension(entry.name);
@@ -47,13 +51,25 @@ function getFileIcon(entry: FileEntry) {
 export function FileList({
   entries,
   selectedPaths,
+  focusedIndex,
   draggedEntry,
   dropTargetPath,
   onContextMenu,
   onMouseDownEntry,
 }: FileListProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Scroll focused row into view
+  useEffect(() => {
+    if (focusedIndex < 0 || !containerRef.current) return;
+    const row = containerRef.current.querySelector(`[data-entry-index="${focusedIndex}"]`);
+    if (row) {
+      row.scrollIntoView({ block: "nearest" });
+    }
+  }, [focusedIndex]);
+
   return (
-    <div className="flex-1 overflow-auto">
+    <div className="flex-1 overflow-auto" ref={containerRef} tabIndex={0}>
       <table className="w-full text-sm">
         <thead className="sticky top-0 bg-background z-10">
           <tr className="border-b border-border text-xs text-muted-foreground">
@@ -64,14 +80,17 @@ export function FileList({
           </tr>
         </thead>
         <tbody>
-          {entries.map((entry) => {
+          {entries.map((entry, index) => {
+            const isParent = entry.name === "..";
             const isSelected = selectedPaths.has(entry.path);
+            const isFocused = index === focusedIndex;
             const isDragged = draggedEntry?.path === entry.path;
             const isDropTarget = dropTargetPath === entry.path && entry.isDir;
             return (
               <tr
                 key={entry.path}
                 data-entry-path={entry.path}
+                data-entry-index={index}
                 data-is-dir={entry.isDir ? "true" : "false"}
                 onContextMenu={(e) => onContextMenu(e, entry)}
                 onMouseDown={(e) => {
@@ -84,22 +103,26 @@ export function FileList({
                     : isSelected
                       ? "bg-primary/10"
                       : "hover:bg-accent/50"
-                } ${isDragged ? "opacity-40" : ""}`}
+                } ${isDragged ? "opacity-40" : ""} ${
+                  isFocused ? "ring-1 ring-inset ring-primary/50" : ""
+                }`}
               >
                 <td className="px-3 py-1.5">
                   <div className="flex items-center gap-2">
                     {getFileIcon(entry)}
-                    <span className="truncate">{entry.name}</span>
+                    <span className="truncate">
+                      {isParent ? ".." : entry.name}
+                    </span>
                   </div>
                 </td>
                 <td className="px-3 py-1.5 text-right text-muted-foreground">
-                  {entry.isDir ? "—" : formatBytes(entry.size)}
+                  {isParent ? "" : entry.isDir ? "—" : formatBytes(entry.size)}
                 </td>
                 <td className="px-3 py-1.5 text-right text-muted-foreground">
-                  {formatDate(entry.modified)}
+                  {isParent ? "" : formatDate(entry.modified)}
                 </td>
                 <td className="px-3 py-1.5 text-right text-muted-foreground font-mono text-xs">
-                  {entry.permissions ?? "—"}
+                  {isParent ? "" : entry.permissions ?? "—"}
                 </td>
               </tr>
             );

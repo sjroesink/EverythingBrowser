@@ -96,6 +96,7 @@ pub fn run() {
             commands::file_commands::create_dir,
             commands::file_commands::download_to_temp,
             commands::file_commands::ensure_drag_icon,
+            commands::file_commands::get_clipboard_files,
             commands::credential_commands::save_credential,
             commands::credential_commands::delete_credential,
             importer::detect_import_sources,

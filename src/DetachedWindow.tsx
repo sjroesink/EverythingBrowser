@@ -340,6 +340,49 @@ export default function DetachedWindow() {
     [clipboardSelection, transfers]
   );
 
+  const handleDuplicateTab = useCallback(
+    async (tabId: string) => {
+      const tab = tabs.find((t) => t.id === tabId);
+      if (!tab) return;
+      try {
+        const connectionId = await connect(tab.config);
+        const defaultPath =
+          tab.config.type === "Sftp" ? tab.config.defaultPath ?? "/" : "/";
+        const newTab: Tab = {
+          id: crypto.randomUUID(),
+          connectionId,
+          config: tab.config,
+          currentPath: defaultPath,
+        };
+        setTabs((prev) => [...prev, newTab]);
+        setActiveTabId(newTab.id);
+      } catch {
+        // handled in hook
+      }
+    },
+    [tabs, connect]
+  );
+
+  const handleCloseOtherTabs = useCallback(
+    (tabId: string) => {
+      const toClose = tabs.filter((t) => t.id !== tabId);
+      for (const tab of toClose) {
+        handleCloseTab(tab.id);
+      }
+    },
+    [tabs, handleCloseTab]
+  );
+
+  const handleCloseConnectionTabs = useCallback(
+    (connectionId: string) => {
+      const toClose = tabs.filter((t) => t.connectionId === connectionId);
+      for (const tab of toClose) {
+        handleCloseTab(tab.id);
+      }
+    },
+    [tabs, handleCloseTab]
+  );
+
   const fileBrowserCallbacks = useMemo<FileBrowserCallbacks>(
     () => ({
       onDownload: handleDownload,
@@ -347,8 +390,12 @@ export default function DetachedWindow() {
       onDropUpload: handleDropUpload,
       onCopyEntries: handleCopyEntries,
       onPaste: handlePaste,
+      onFileDrop: () => {},
       canPaste: Boolean(clipboardSelection),
       activeConnectionIds,
+      onDuplicateTab: handleDuplicateTab,
+      onCloseAllTabsForConnection: handleCloseConnectionTabs,
+      onDisconnectIfUnused: () => {}, // DetachedWindow manages connections differently
     }),
     [
       handleDownload,
@@ -358,6 +405,8 @@ export default function DetachedWindow() {
       handlePaste,
       clipboardSelection,
       activeConnectionIds,
+      handleDuplicateTab,
+      handleCloseConnectionTabs,
     ]
   );
 
@@ -373,6 +422,9 @@ export default function DetachedWindow() {
             paneId="detached"
             onSelectTab={setActiveTabId}
             onCloseTab={handleCloseTab}
+            onDuplicateTab={handleDuplicateTab}
+            onCloseOtherTabs={handleCloseOtherTabs}
+            onCloseConnectionTabs={handleCloseConnectionTabs}
           />
 
           <div className="flex-1 relative min-h-0">

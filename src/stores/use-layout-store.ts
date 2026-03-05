@@ -25,14 +25,32 @@ export interface TabDragState {
   sourcePaneId: string;
 }
 
+export interface ConnectionDragState {
+  configId: string;
+  name: string;
+  connectionType: string;
+}
+
+export interface FileDragState {
+  sourceConnectionId: string;
+  sourcePaneId: string;
+  entries: { path: string; name: string; isDir: boolean }[];
+}
+
 interface LayoutStore {
   root: LayoutNode;
   sidebarCollapsed: boolean;
+  focusedPaneId: string | null;
   tabDrag: TabDragState | null;
+  connectionDrag: ConnectionDragState | null;
+  fileDrag: FileDragState | null;
 
   // Sidebar
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
+
+  // Focus
+  setFocusedPane: (paneId: string) => void;
 
   // Pane operations
   splitPane: (
@@ -50,9 +68,45 @@ interface LayoutStore {
   startTabDrag: (tabId: string, sourcePaneId: string) => void;
   endTabDrag: () => void;
 
+  // Connection drag (from sidebar)
+  startConnectionDrag: (configId: string, name: string, connectionType: string) => void;
+  endConnectionDrag: () => void;
+
+  // File drag (cross-pane copy)
+  startFileDrag: (sourceConnectionId: string, sourcePaneId: string, entries: FileDragState["entries"]) => void;
+  endFileDrag: () => void;
+
   // Queries
   findPaneForTab: (tabId: string) => string | null;
   getFirstPaneId: () => string;
+
+  // Dock operations (atomic remove + split)
+  dockTabToSplit: (
+    tabId: string,
+    sourcePaneId: string,
+    targetPaneId: string,
+    direction: SplitDirection,
+    insertBefore: boolean
+  ) => void;
+  dockTabToEdge: (
+    tabId: string,
+    sourcePaneId: string,
+    direction: SplitDirection,
+    insertBefore: boolean
+  ) => void;
+
+  // Place a brand-new tab (no source pane) into a split or edge
+  placeNewTabInSplit: (
+    tabId: string,
+    targetPaneId: string,
+    direction: SplitDirection,
+    insertBefore: boolean
+  ) => void;
+  placeNewTabAtEdge: (
+    tabId: string,
+    direction: SplitDirection,
+    insertBefore: boolean
+  ) => void;
 
   // Cleanup
   removeTabFromAllPanes: (tabId: string) => void;
@@ -155,13 +209,19 @@ export const useLayoutStore = create<LayoutStore>()(
     (set, get) => ({
       root: DEFAULT_ROOT,
       sidebarCollapsed: false,
+      focusedPaneId: null,
       tabDrag: null,
+      connectionDrag: null,
+      fileDrag: null,
 
       toggleSidebar: () =>
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
 
       setSidebarCollapsed: (collapsed) =>
         set({ sidebarCollapsed: collapsed }),
+
+      setFocusedPane: (paneId) =>
+        set({ focusedPaneId: paneId }),
 
       splitPane: (paneId, direction, newTabId) => {
         set((state) => {
@@ -224,6 +284,7 @@ export const useLayoutStore = create<LayoutStore>()(
 
       addTabToPane: (paneId, tabId) => {
         set((state) => ({
+          focusedPaneId: paneId,
           root: updateNodeInTree(state.root, paneId, (node) => {
             if (node.type !== "pane") return node;
             if (node.tabIds.includes(tabId)) {
@@ -283,6 +344,22 @@ export const useLayoutStore = create<LayoutStore>()(
         set({ tabDrag: null });
       },
 
+      startConnectionDrag: (configId, name, connectionType) => {
+        set({ connectionDrag: { configId, name, connectionType } });
+      },
+
+      endConnectionDrag: () => {
+        set({ connectionDrag: null });
+      },
+
+      startFileDrag: (sourceConnectionId, sourcePaneId, entries) => {
+        set({ fileDrag: { sourceConnectionId, sourcePaneId, entries } });
+      },
+
+      endFileDrag: () => {
+        set({ fileDrag: null });
+      },
+
       findPaneForTab: (tabId) => {
         const pane = findPaneWithTab(get().root, tabId);
         return pane?.id ?? null;
@@ -290,6 +367,145 @@ export const useLayoutStore = create<LayoutStore>()(
 
       getFirstPaneId: () => {
         return getFirstPane(get().root).id;
+      },
+
+      dockTabToSplit: (tabId, sourcePaneId, targetPaneId, direction, insertBefore) => {
+        set((state) => {
+          let root = state.root;
+
+          // 1. Remove tab from source pane (without cleanup yet)
+          root = updateNodeInTree(root, sourcePaneId, (node) => {
+            if (node.type !== "pane") return node;
+            const newTabIds = node.tabIds.filter((id) => id !== tabId);
+            return {
+              ...node,
+              tabIds: newTabIds,
+              activeTabId:
+                node.activeTabId === tabId
+                  ? newTabIds[0] ?? null
+                  : node.activeTabId,
+            };
+          });
+
+          // 2. Split the target pane, placing the new pane before or after
+          const targetPane = findNode(root, targetPaneId);
+          if (targetPane && targetPane.type === "pane") {
+            const newPane: PaneNode = {
+              type: "pane",
+              id: generateId(),
+              tabIds: [tabId],
+              activeTabId: tabId,
+            };
+
+            const splitNode: SplitNode = {
+              type: "split",
+              id: generateId(),
+              direction,
+              children: insertBefore
+                ? [newPane, targetPane]
+                : [targetPane, newPane],
+              sizes: [50, 50],
+            };
+
+            root = replaceNode(root, targetPaneId, splitNode);
+          }
+
+          // 3. Cleanup empty panes
+          const cleaned = cleanupTree(root);
+          return { root: cleaned ?? DEFAULT_ROOT };
+        });
+      },
+
+      dockTabToEdge: (tabId, sourcePaneId, direction, insertBefore) => {
+        set((state) => {
+          let root = state.root;
+
+          // 1. Remove tab from source pane
+          root = updateNodeInTree(root, sourcePaneId, (node) => {
+            if (node.type !== "pane") return node;
+            const newTabIds = node.tabIds.filter((id) => id !== tabId);
+            return {
+              ...node,
+              tabIds: newTabIds,
+              activeTabId:
+                node.activeTabId === tabId
+                  ? newTabIds[0] ?? null
+                  : node.activeTabId,
+            };
+          });
+
+          // 2. Cleanup empty panes first
+          root = cleanupTree(root) ?? DEFAULT_ROOT;
+
+          // 3. Wrap entire root in a split with the new pane
+          const newPane: PaneNode = {
+            type: "pane",
+            id: generateId(),
+            tabIds: [tabId],
+            activeTabId: tabId,
+          };
+
+          const splitNode: SplitNode = {
+            type: "split",
+            id: generateId(),
+            direction,
+            children: insertBefore
+              ? [newPane, root]
+              : [root, newPane],
+            sizes: [50, 50],
+          };
+
+          return { root: splitNode };
+        });
+      },
+
+      placeNewTabInSplit: (tabId, targetPaneId, direction, insertBefore) => {
+        set((state) => {
+          const targetPane = findNode(state.root, targetPaneId);
+          if (!targetPane || targetPane.type !== "pane") return state;
+
+          const newPane: PaneNode = {
+            type: "pane",
+            id: generateId(),
+            tabIds: [tabId],
+            activeTabId: tabId,
+          };
+
+          const splitNode: SplitNode = {
+            type: "split",
+            id: generateId(),
+            direction,
+            children: insertBefore
+              ? [newPane, targetPane]
+              : [targetPane, newPane],
+            sizes: [50, 50],
+          };
+
+          return { root: replaceNode(state.root, targetPaneId, splitNode) };
+        });
+      },
+
+      placeNewTabAtEdge: (tabId, direction, insertBefore) => {
+        set((state) => {
+          const newPane: PaneNode = {
+            type: "pane",
+            id: generateId(),
+            tabIds: [tabId],
+            activeTabId: tabId,
+          };
+
+          const splitNode: SplitNode = {
+            type: "split",
+            id: generateId(),
+            direction,
+            children: insertBefore
+              ? [newPane, state.root]
+              : [state.root, newPane],
+            sizes: [50, 50],
+          };
+
+          return { root: splitNode };
+        });
       },
 
       removeTabFromAllPanes: (tabId) => {

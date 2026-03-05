@@ -1,14 +1,15 @@
-import { Server, Cloud, MoreHorizontal, Plug, Unplug, Pencil, Trash2 } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
+import { Server, Cloud, MoreHorizontal, Pencil, Trash2, XCircle } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useLayoutStore } from "@/stores/use-layout-store";
 import type { ConnectionConfig, SavedConnection } from "@/types/connection";
+
+const DRAG_THRESHOLD = 5;
 
 interface ConnectionItemProps {
   connection: SavedConnection;
-  isActive: boolean;
-  isConnecting: boolean;
   tabCount: number;
   onConnect: (config: ConnectionConfig, secret?: string) => void;
-  onDisconnect: (connectionId: string) => void;
+  onCloseAllTabs: (connectionId: string) => void;
   onFocusConnection: (connectionId: string) => void;
   onEdit: (config: ConnectionConfig) => void;
   onRemove: (id: string) => void;
@@ -16,18 +17,19 @@ interface ConnectionItemProps {
 
 export function ConnectionItem({
   connection,
-  isActive,
-  isConnecting,
   tabCount,
   onConnect,
-  onDisconnect,
+  onCloseAllTabs,
   onFocusConnection,
   onEdit,
   onRemove,
 }: ConnectionItemProps) {
   const [showMenu, setShowMenu] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const itemRef = useRef<HTMLDivElement>(null);
   const { config } = connection;
+  const hasOpenTabs = tabCount > 0;
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -59,25 +61,86 @@ export function ConnectionItem({
     }
   };
 
+  const startConnectionDrag = useLayoutStore((s) => s.startConnectionDrag);
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+
   const handleDoubleClick = () => {
     onConnect(config);
   };
 
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
+      if ((e.target as HTMLElement).closest("button")) return;
+
+      dragStartRef.current = { x: e.clientX, y: e.clientY };
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        if (!dragStartRef.current) return;
+        const dx = moveEvent.clientX - dragStartRef.current.x;
+        const dy = moveEvent.clientY - dragStartRef.current.y;
+
+        if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
+          startConnectionDrag(config.id, config.name, config.type);
+          dragStartRef.current = null;
+          document.removeEventListener("mousemove", handleMouseMove);
+          document.removeEventListener("mouseup", handleMouseUp);
+        }
+      };
+
+      const handleMouseUp = () => {
+        dragStartRef.current = null;
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+      };
+
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+    },
+    [config, startConnectionDrag]
+  );
+
+  const openMenu = (x: number, y: number) => {
+    setMenuPosition({ x, y });
+    setShowMenu(true);
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    openMenu(e.clientX, e.clientY);
+  };
+
+  const handleMenuButtonClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (showMenu) {
+      setShowMenu(false);
+      return;
+    }
+    // Position relative to the button
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    openMenu(rect.right, rect.bottom);
+  };
+
   return (
-    <div className="relative" ref={menuRef}>
+    <div className="relative" ref={itemRef}>
       <div
         onDoubleClick={handleDoubleClick}
+        onMouseDown={handleMouseDown}
+        onContextMenu={handleContextMenu}
+        onClick={() => {
+          if (hasOpenTabs) onFocusConnection(config.id);
+        }}
         className={`flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer group transition-colors ${
-          isActive
+          hasOpenTabs
             ? "bg-primary/10 text-foreground"
             : "hover:bg-foreground/5 text-foreground/80"
         }`}
       >
         <div className="relative shrink-0">
-          <span className={isActive ? "text-primary" : "text-muted-foreground"}>
+          <span className={hasOpenTabs ? "text-primary" : "text-muted-foreground"}>
             {getIcon()}
           </span>
-          {isActive && (
+          {hasOpenTabs && tabCount <= 1 && (
             <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-success rounded-full border border-sidebar" />
           )}
         </div>
@@ -97,10 +160,7 @@ export function ConnectionItem({
         </div>
 
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            setShowMenu(!showMenu);
-          }}
+          onClick={handleMenuButtonClick}
           className="shrink-0 w-6 h-6 rounded-md inline-flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-foreground/10 transition-all"
         >
           <MoreHorizontal className="w-3.5 h-3.5" />
@@ -108,30 +168,25 @@ export function ConnectionItem({
       </div>
 
       {showMenu && (
-        <div className="absolute right-0 top-full mt-1 z-50 w-44 bg-popover border border-border rounded-lg shadow-lg py-1">
-          {isActive ? (
-            <button
-              onClick={() => {
-                onDisconnect(config.id);
-                setShowMenu(false);
-              }}
-              className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-left hover:bg-accent transition-colors"
-            >
-              <Unplug className="w-3.5 h-3.5" />
-              Disconnect
-            </button>
-          ) : (
-            <button
-              onClick={() => {
-                onConnect(config);
-                setShowMenu(false);
-              }}
-              disabled={isConnecting}
-              className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-left hover:bg-accent transition-colors disabled:opacity-50"
-            >
-              <Plug className="w-3.5 h-3.5" />
-              Connect
-            </button>
+        <div
+          ref={menuRef}
+          className="fixed z-50 w-44 bg-popover border border-border rounded-lg shadow-lg py-1"
+          style={menuPosition ? { left: menuPosition.x, top: menuPosition.y } : undefined}
+        >
+          {hasOpenTabs && (
+            <>
+              <button
+                onClick={() => {
+                  onCloseAllTabs(config.id);
+                  setShowMenu(false);
+                }}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-sm text-left hover:bg-accent transition-colors"
+              >
+                <XCircle className="w-3.5 h-3.5" />
+                Close all tabs
+              </button>
+              <div className="my-1 border-t border-border" />
+            </>
           )}
           <button
             onClick={() => {

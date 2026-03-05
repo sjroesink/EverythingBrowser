@@ -200,6 +200,93 @@ fn set_windows_file_clipboard(_paths: &[PathBuf]) -> Result<(), AppError> {
         "Explorer paste is only available on Windows".to_string(),
     ))
 }
+
+#[cfg(windows)]
+fn get_windows_file_clipboard() -> Result<Vec<String>, AppError> {
+    use std::ptr::null_mut;
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    };
+    use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+    use windows_sys::Win32::UI::Shell::DROPFILES;
+
+    const CF_HDROP_FORMAT: u32 = 15;
+
+    unsafe {
+        if IsClipboardFormatAvailable(CF_HDROP_FORMAT) == 0 {
+            return Ok(vec![]);
+        }
+
+        if OpenClipboard(null_mut()) == 0 {
+            return Ok(vec![]);
+        }
+
+        let hglobal = GetClipboardData(CF_HDROP_FORMAT);
+        if hglobal.is_null() {
+            let _ = CloseClipboard();
+            return Ok(vec![]);
+        }
+
+        let ptr = GlobalLock(hglobal) as *const u8;
+        if ptr.is_null() {
+            let _ = CloseClipboard();
+            return Ok(vec![]);
+        }
+
+        let dropfiles = &*(ptr as *const DROPFILES);
+        let is_wide = dropfiles.fWide != 0;
+        let offset = dropfiles.pFiles as usize;
+
+        let mut paths = Vec::new();
+
+        if is_wide {
+            let mut current = ptr.add(offset) as *const u16;
+            loop {
+                let mut len = 0;
+                while *current.add(len) != 0 {
+                    len += 1;
+                }
+                if len == 0 {
+                    break;
+                }
+                let slice = std::slice::from_raw_parts(current, len);
+                paths.push(String::from_utf16_lossy(slice));
+                current = current.add(len + 1);
+            }
+        } else {
+            let mut current = ptr.add(offset);
+            loop {
+                let mut len = 0;
+                while *current.add(len) != 0 {
+                    len += 1;
+                }
+                if len == 0 {
+                    break;
+                }
+                let slice = std::slice::from_raw_parts(current, len);
+                paths.push(String::from_utf8_lossy(slice).to_string());
+                current = current.add(len + 1);
+            }
+        }
+
+        let _ = GlobalUnlock(hglobal);
+        let _ = CloseClipboard();
+
+        Ok(paths)
+    }
+}
+
+#[cfg(not(windows))]
+fn get_windows_file_clipboard() -> Result<Vec<String>, AppError> {
+    Ok(vec![])
+}
+
+#[tauri::command]
+pub async fn get_clipboard_files() -> Result<Vec<String>, AppError> {
+    tokio::task::spawn_blocking(get_windows_file_clipboard)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+}
 async fn is_remote_directory(
     manager: &ConnectionManager,
     connection_id: &str,
