@@ -9,6 +9,9 @@
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
+  "bundle": {
+    "createUpdaterArtifacts": true
+  },
   "app": {
     "windows": [
       {
@@ -28,6 +31,12 @@
   "plugins": {
     "shell": {
       "open": true
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY4MkJENUM0QUNFOEIyRUYKUldUdnN1aXN4TlVyK1B6Q3lrUnpTMGxrdFY5VnhFeGtnWU9QR1R4enFtY1k5d2E5UFd0ajhYN20K",
+      "endpoints": [
+        "https://github.com/sjroesink/EverythingBrowser/releases/latest/download/latest.json"
+      ]
     },
     "cli": {
       "description": "A file transfer client for SFTP and Backblaze B2",

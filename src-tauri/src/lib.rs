@@ -53,6 +53,7 @@ pub fn run() {
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_cli::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ConnectionManager::new())
         .manage(CliLaunchState(Mutex::new(None)))
         .setup(|app| {

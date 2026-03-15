@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { Titlebar } from "@/components/layout/titlebar";
+import { UpdateToast } from "@/components/layout/update-toast";
 import { Sidebar } from "@/components/layout/sidebar";
 import { StatusBar } from "@/components/layout/status-bar";
 import { LayoutRenderer } from "@/components/layout/layout-renderer";
@@ -15,6 +16,7 @@ import {
   FileBrowserProvider,
   type FileBrowserCallbacks,
 } from "@/contexts/file-browser-context";
+import { useUpdateChecker } from "@/hooks/use-update-checker";
 import { useTheme } from "@/hooks/use-theme";
 import { useConnections } from "@/hooks/use-connections";
 import { useTransferQueue } from "@/hooks/use-transfer-queue";
@@ -54,6 +56,7 @@ async function openSettingsWindow() {
 
 export default function App() {
   useTheme();
+  const updateState = useUpdateChecker();
   const {
     savedConnections,
     activeConnectionIds,
@@ -650,6 +653,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-background">
       <Titlebar onOpenSettings={openSettingsWindow} />
+      <UpdateToast update={updateState} />
 
       <div className="flex flex-1 min-h-0">
         <Sidebar
