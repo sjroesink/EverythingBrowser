@@ -60,7 +60,7 @@ export default function App() {
   const {
     savedConnections,
     activeConnectionIds,
-    isConnecting,
+    isConnecting: _isConnecting,
     isLoaded: connectionsLoaded,
     addConnection,
     addConnections,

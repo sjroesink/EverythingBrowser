@@ -153,7 +153,7 @@ export default function DetachedWindow() {
 
   // Handle detach: send tab back to main window
   const handleDetachTab = useCallback(
-    (tabId: string, sourcePaneId: string, _screenX: number, _screenY: number) => {
+    (tabId: string, _sourcePaneId: string, _screenX: number, _screenY: number) => {
       const tab = useTabsStore.getState().getTab(tabId);
       if (!tab) return;
 
@@ -165,23 +165,6 @@ export default function DetachedWindow() {
       }
     },
     [removeTabFromAllPanes, closeTabInStore]
-  );
-
-  const closeTab = useCallback(
-    (tabId: string) => {
-      const tab = useTabsStore.getState().getTab(tabId);
-      removeTabFromAllPanes(tabId);
-      closeTabInStore(tabId);
-      if (tab) {
-        const remaining = useTabsStore.getState().tabs.filter(
-          (t) => t.connectionId === tab.connectionId
-        );
-        if (remaining.length === 0) {
-          void disconnect(tab.connectionId);
-        }
-      }
-    },
-    [removeTabFromAllPanes, closeTabInStore, disconnect]
   );
 
   const handleDownload = useCallback(
@@ -413,6 +396,7 @@ export default function DetachedWindow() {
         transferCount={transfers.activeCount}
         isTransfersOpen={showTransfers}
         onToggleTransfers={() => setShowTransfers(!showTransfers)}
+        onOpenSettings={() => {}}
       />
     </div>
   );

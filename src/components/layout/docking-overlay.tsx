@@ -54,7 +54,6 @@ export function DockingOverlay({ onConnectionDrop, onDuplicateTabDrop, onDetachT
   const dockTabToEdge = useLayoutStore((s) => s.dockTabToEdge);
   const endTabDrag = useLayoutStore((s) => s.endTabDrag);
   const endConnectionDrag = useLayoutStore((s) => s.endConnectionDrag);
-  const addTabToPane = useLayoutStore((s) => s.addTabToPane);
   const getFirstPaneId = useLayoutStore((s) => s.getFirstPaneId);
 
   const isDragging = tabDrag || connectionDrag;
