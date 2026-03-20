@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { useSettingsStore } from "@/stores/use-settings-store";
 
 export interface UpdateState {
   available: boolean;
@@ -18,6 +20,7 @@ export interface UpdateState {
 const CHECK_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours
 
 export function useUpdateChecker(): UpdateState {
+  const autoUpdate = useSettingsStore((s) => s.autoUpdate);
   const [available, setAvailable] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   const [body, setBody] = useState<string | null>(null);
@@ -102,6 +105,16 @@ export function useUpdateChecker(): UpdateState {
       clearInterval(interval);
     };
   }, [checkForUpdate]);
+
+  // Auto-install update when enabled in settings
+  useEffect(() => {
+    if (available && autoUpdate && !downloading && !readyToRestart) {
+      void (async () => {
+        await installUpdate();
+        await relaunch();
+      })();
+    }
+  }, [available, autoUpdate, downloading, readyToRestart, installUpdate]);
 
   return {
     available,

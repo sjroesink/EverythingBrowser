@@ -258,6 +258,8 @@ export function SettingsContent({
   const resetToDefaults = useKeybindingsStore((s) => s.resetToDefaults);
   const editorPath = useSettingsStore((s) => s.editorPath);
   const setEditorPath = useSettingsStore((s) => s.setEditorPath);
+  const autoUpdate = useSettingsStore((s) => s.autoUpdate);
+  const setAutoUpdate = useSettingsStore((s) => s.setAutoUpdate);
   const [detectedEditors, setDetectedEditors] = useState<DetectedEditor[]>([]);
 
   useEffect(() => {
@@ -363,6 +365,27 @@ export function SettingsContent({
                     ))}
                   </div>
                 )}
+              </div>
+
+              <div>
+                <label className="block text-xs text-muted-foreground mb-2">Auto Update</label>
+                <label className="inline-flex items-center gap-2.5 cursor-pointer select-none">
+                  <button
+                    role="switch"
+                    aria-checked={autoUpdate}
+                    onClick={() => setAutoUpdate(!autoUpdate)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors ${
+                      autoUpdate ? "bg-primary" : "bg-input"
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none block h-4 w-4 rounded-full bg-background shadow-sm transition-transform ${
+                        autoUpdate ? "translate-x-4" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                  <span className="text-sm text-foreground">Automatically download and install updates</span>
+                </label>
               </div>
             </div>
           )}
