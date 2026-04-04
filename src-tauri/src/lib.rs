@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_cli::CliExt;
+use watcher::FileWatcherManager;
 
 /// Data passed from CLI --connect arg to the frontend detached window.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +58,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ConnectionManager::new())
         .manage(CliLaunchState(Mutex::new(None)))
+        .manage(FileWatcherManager::new())
         .setup(|app| {
             // Clean up orphaned Docker helper containers from previous sessions
             tauri::async_runtime::spawn(async {
@@ -122,12 +124,18 @@ pub fn run() {
             commands::editor_commands::open_path_in_explorer,
             commands::editor_commands::get_app_data_dir,
             commands::editor_commands::detect_editors,
+            commands::watcher_commands::watch_edited_file,
+            commands::watcher_commands::stop_watching_file,
+            commands::watcher_commands::stop_all_watchers,
             get_cli_connection,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                // Stop all file watchers
+                let watcher_mgr: tauri::State<'_, FileWatcherManager> = app.state();
+                watcher_mgr.stop_all();
                 // Disconnect all active connections (cleans up Docker helper containers)
                 let manager: tauri::State<'_, ConnectionManager> = app.state();
                 tauri::async_runtime::block_on(async {
