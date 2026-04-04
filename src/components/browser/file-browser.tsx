@@ -19,6 +19,8 @@ import {
   ensureDragIcon,
   getClipboardFiles,
   openInEditor,
+  uploadFile,
+  watchEditedFile,
 } from "@/services/file-service";
 import { useLayoutStore } from "@/stores/use-layout-store";
 import { useSettingsStore } from "@/stores/use-settings-store";
@@ -323,6 +325,7 @@ export function FileBrowser({
       try {
         const localPath = await downloadToTemp(connectionId, entry.path);
         await openInEditor(editorPath, localPath);
+        await watchEditedFile(localPath, connectionId, entry.path);
       } catch (e) {
         console.error("Edit in editor failed:", e);
       }
@@ -626,6 +629,17 @@ export function FileBrowser({
         }
       }
     ).then((u) => unlisteners.push(u));
+
+    listen<{
+      tempPath: string;
+      connectionId: string;
+      remotePath: string;
+    }>("edited-file-changed", (event) => {
+      const { tempPath, connectionId: connId, remotePath } = event.payload;
+      uploadFile(connId, tempPath, remotePath, () => {}).catch((e) =>
+        console.error("Auto-upload after editor save failed:", e)
+      );
+    }).then((u) => unlisteners.push(u));
 
     return () => {
       unlisteners.forEach((u) => u());
