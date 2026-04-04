@@ -145,6 +145,10 @@ export function FileBrowser({
   const dragIconPath = useRef<string>("");
   const lastClickRef = useRef<{ path: string; time: number } | null>(null);
 
+  // Ref for connectionId (avoid stale closure in edited-file-changed listener)
+  const connectionIdRef = useRef(connectionId);
+  connectionIdRef.current = connectionId;
+
   // Refs for callbacks and data (avoid stale closures in global mouse handlers)
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
@@ -636,6 +640,7 @@ export function FileBrowser({
       remotePath: string;
     }>("edited-file-changed", (event) => {
       const { tempPath, connectionId: connId, remotePath } = event.payload;
+      if (connId !== connectionIdRef.current) return;
       uploadFile(connId, tempPath, remotePath, () => {}).catch((e) =>
         console.error("Auto-upload after editor save failed:", e)
       );
