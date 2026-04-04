@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Folder,
   File,
@@ -48,6 +48,9 @@ function getFileIcon(entry: FileEntry) {
   return <File className="w-4 h-4 text-muted-foreground" />;
 }
 
+const DEFAULT_WIDTHS = { size: 96, modified: 176, permissions: 112 };
+const MIN_COL_WIDTH = 50;
+
 export function FileList({
   entries,
   selectedPaths,
@@ -58,6 +61,7 @@ export function FileList({
   onMouseDownEntry,
 }: FileListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [colWidths, setColWidths] = useState(DEFAULT_WIDTHS);
 
   // Scroll focused row into view
   useEffect(() => {
@@ -68,15 +72,68 @@ export function FileList({
     }
   }, [focusedIndex]);
 
+  const onResizeStart = useCallback((e: React.MouseEvent, colKey: keyof typeof DEFAULT_WIDTHS) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const startX = e.clientX;
+    const startW = colWidths[colKey];
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const delta = ev.clientX - startX;
+      const newW = Math.max(MIN_COL_WIDTH, startW + delta);
+      setColWidths((prev) => ({ ...prev, [colKey]: newW }));
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, [colWidths]);
+
+  const resizeHandle = (colKey: keyof typeof DEFAULT_WIDTHS) => (
+    <div
+      onMouseDown={(e) => onResizeStart(e, colKey)}
+      className="absolute right-0 top-0 bottom-0 w-[7px] cursor-col-resize z-10 group"
+      style={{ transform: "translateX(50%)" }}
+    >
+      <div className="absolute inset-y-1 left-1/2 w-[1px] -translate-x-1/2 bg-border group-hover:bg-primary/60 group-active:bg-primary transition-colors" />
+    </div>
+  );
+
   return (
     <div className="flex-1 overflow-auto" ref={containerRef} tabIndex={0}>
-      <table className="w-full text-sm">
+      <table className="w-full text-sm table-fixed">
+        <colgroup>
+          <col />
+          <col style={{ width: colWidths.size }} />
+          <col style={{ width: colWidths.modified }} />
+          <col style={{ width: colWidths.permissions }} />
+        </colgroup>
         <thead className="sticky top-0 bg-background z-10">
           <tr className="border-b border-border text-xs text-muted-foreground">
-            <th className="text-left font-medium px-3 py-2">Name</th>
-            <th className="text-right font-medium px-3 py-2 w-24">Size</th>
-            <th className="text-right font-medium px-3 py-2 w-44">Modified</th>
-            <th className="text-right font-medium px-3 py-2 w-28">Permissions</th>
+            <th className="text-left font-medium px-3 py-2">
+              Name
+            </th>
+            <th className="text-right font-medium px-3 py-2 relative">
+              Size
+              {resizeHandle("size")}
+            </th>
+            <th className="text-right font-medium px-3 py-2 relative">
+              Modified
+              {resizeHandle("modified")}
+            </th>
+            <th className="text-right font-medium px-3 py-2 relative">
+              Permissions
+              {resizeHandle("permissions")}
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -107,7 +164,7 @@ export function FileList({
                   isFocused ? "ring-1 ring-inset ring-primary/50" : ""
                 }`}
               >
-                <td className="px-3 py-1.5">
+                <td className="px-3 py-1.5 truncate">
                   <div className="flex items-center gap-2">
                     {getFileIcon(entry)}
                     <span className="truncate">
@@ -115,13 +172,13 @@ export function FileList({
                     </span>
                   </div>
                 </td>
-                <td className="px-3 py-1.5 text-right text-muted-foreground">
+                <td className="px-3 py-1.5 text-right text-muted-foreground whitespace-nowrap">
                   {isParent ? "" : entry.isDir ? "—" : formatBytes(entry.size)}
                 </td>
-                <td className="px-3 py-1.5 text-right text-muted-foreground">
+                <td className="px-3 py-1.5 text-right text-muted-foreground whitespace-nowrap">
                   {isParent ? "" : formatDate(entry.modified)}
                 </td>
-                <td className="px-3 py-1.5 text-right text-muted-foreground font-mono text-xs">
+                <td className="px-3 py-1.5 text-right text-muted-foreground font-mono text-xs whitespace-nowrap">
                   {isParent ? "" : entry.permissions ?? "—"}
                 </td>
               </tr>

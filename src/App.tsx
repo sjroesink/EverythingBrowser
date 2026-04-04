@@ -156,6 +156,22 @@ export default function App() {
     }
   }, [connectionsLoaded, savedConnections, onboardingChecked]);
 
+  // Auto-upload when editor saves a watched file
+  useEffect(() => {
+    const unlisten = listen<{
+      tempPath: string;
+      connectionId: string;
+      remotePath: string;
+    }>("edited-file-changed", (event) => {
+      const { tempPath, connectionId: connId, remotePath } = event.payload;
+      const fileName = remotePath.split("/").pop() || "file";
+      transfers.enqueueUpload(connId, tempPath, remotePath, fileName);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [transfers]);
+
   // Global keyboard shortcuts
   const switchTab = useCallback(
     (direction: number) => {

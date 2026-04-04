@@ -83,14 +83,6 @@ pub fn run() {
                     std::process::exit(0);
                 }
             }
-            // DEBUG: auto-open settings window to reproduce crash
-            let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::default())
-                .title("Settings")
-                .inner_size(700.0, 500.0)
-                .decorations(false)
-                .center()
-                .build();
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

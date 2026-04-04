@@ -109,7 +109,7 @@ impl FileWatcherManager {
         // Spawn inactivity timeout (30 min)
         let temp_path_for_timeout = temp_path;
         let watchers_for_timeout = self.watchers.clone();
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             let timeout = Duration::from_secs(30 * 60);
             loop {
                 tokio::time::sleep(Duration::from_secs(60)).await;

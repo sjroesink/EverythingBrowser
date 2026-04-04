@@ -151,6 +151,22 @@ export default function DetachedWindow() {
     };
   }, []);
 
+  // Auto-upload when editor saves a watched file
+  useEffect(() => {
+    const unlisten = listen<{
+      tempPath: string;
+      connectionId: string;
+      remotePath: string;
+    }>("edited-file-changed", (event) => {
+      const { tempPath, connectionId: connId, remotePath } = event.payload;
+      const fileName = remotePath.split("/").pop() || "file";
+      transfers.enqueueUpload(connId, tempPath, remotePath, fileName);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [transfers]);
+
   // Handle detach: send tab back to main window
   const handleDetachTab = useCallback(
     (tabId: string, _sourcePaneId: string, _screenX: number, _screenY: number) => {

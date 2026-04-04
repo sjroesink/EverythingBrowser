@@ -19,7 +19,6 @@ import {
   ensureDragIcon,
   getClipboardFiles,
   openInEditor,
-  uploadFile,
   watchEditedFile,
 } from "@/services/file-service";
 import { useLayoutStore } from "@/stores/use-layout-store";
@@ -144,10 +143,6 @@ export function FileBrowser({
   const dragCancelledRef = useRef(false);
   const dragIconPath = useRef<string>("");
   const lastClickRef = useRef<{ path: string; time: number } | null>(null);
-
-  // Ref for connectionId (avoid stale closure in edited-file-changed listener)
-  const connectionIdRef = useRef(connectionId);
-  connectionIdRef.current = connectionId;
 
   // Refs for callbacks and data (avoid stale closures in global mouse handlers)
   const onSelectRef = useRef(onSelect);
@@ -633,18 +628,6 @@ export function FileBrowser({
         }
       }
     ).then((u) => unlisteners.push(u));
-
-    listen<{
-      tempPath: string;
-      connectionId: string;
-      remotePath: string;
-    }>("edited-file-changed", (event) => {
-      const { tempPath, connectionId: connId, remotePath } = event.payload;
-      if (connId !== connectionIdRef.current) return;
-      uploadFile(connId, tempPath, remotePath, () => {}).catch((e) =>
-        console.error("Auto-upload after editor save failed:", e)
-      );
-    }).then((u) => unlisteners.push(u));
 
     return () => {
       unlisteners.forEach((u) => u());

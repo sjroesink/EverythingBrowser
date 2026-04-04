@@ -8,6 +8,8 @@ interface SettingsState {
   setAutoUpdate: (enabled: boolean) => void;
 }
 
+const STORE_KEY = "settings-store-v1";
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
@@ -17,8 +19,28 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoUpdate: (enabled) => set({ autoUpdate: enabled }),
     }),
     {
-      name: "settings-store-v1",
+      name: STORE_KEY,
       storage: createJSONStorage(() => localStorage),
     }
   )
 );
+
+// Sync settings across Tauri windows via localStorage "storage" event
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key === STORE_KEY && e.newValue) {
+      try {
+        const parsed = JSON.parse(e.newValue);
+        const s = parsed?.state;
+        if (s) {
+          useSettingsStore.setState({
+            editorPath: s.editorPath ?? "",
+            autoUpdate: s.autoUpdate ?? false,
+          });
+        }
+      } catch {
+        // ignore malformed data
+      }
+    }
+  });
+}
