@@ -172,3 +172,15 @@ export interface DetectedEditor {
 export async function detectEditors(): Promise<DetectedEditor[]> {
   return invoke<DetectedEditor[]>("detect_editors");
 }
+
+export async function watchEditedFile(
+  tempPath: string,
+  connectionId: string,
+  remotePath: string
+): Promise<void> {
+  return invoke("watch_edited_file", { tempPath, connectionId, remotePath });
+}
+
+export async function stopWatchingFile(tempPath: string): Promise<void> {
+  return invoke("stop_watching_file", { tempPath });
+}
